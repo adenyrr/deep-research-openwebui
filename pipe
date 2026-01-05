@@ -6012,13 +6012,14 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
 
             # If configured to stream final only and research is not completed, send a masked message
             if self.valves.STREAM_FINAL_ONLY and not state.get("research_completed", False):
-                masked_content = f"<think>{message}</think>"
+                # Send the raw content and mark it as masked and streaming; the UI should wrap it in <think> tags
                 await self.__current_event_emitter__(
                     {
                         "type": "message",
                         "data": {
-                            "content": masked_content,
+                            "content": message,
                             "masked": True,
+                            "masked_stream": True,
                         },
                     }
                 )
@@ -6045,16 +6046,17 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
 
             # If configured to stream final only, send masked intermediate statuses (unless error)
             if self.valves.STREAM_FINAL_ONLY and not done and level != "error":
-                masked_desc = f"<think>{message}</think>"
+                # Send the raw description and mark it masked; the UI should wrap masked content in <think> tags
                 await self.__current_event_emitter__(
                     {
                         "type": "status",
                         "data": {
                             "status": "in_progress",
                             "level": level,
-                            "description": masked_desc,
+                            "description": message,
                             "done": done,
                             "masked": True,
+                            "masked_stream": True,
                         },
                     }
                 )

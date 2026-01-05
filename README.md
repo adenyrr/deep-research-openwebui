@@ -213,8 +213,7 @@ p.valves.STREAM_FINAL_ONLY = True
 ```
 
 - Détails d'affichage :
-  - Les événements ont maintenant un champ `masked: True` et le contenu est enveloppé via `<think>...</think>` lorsque `STREAM_FINAL_ONLY=True`.
-  - Les erreurs (`level == "error"`) ne sont jamais masquées.
+# Les événements ont maintenant un champ `masked: True`. Les messages intermédiaires sont envoyés en clair mais avec `masked=True` et `masked_stream=True`; l'interface peut les afficher enveloppés dans `<think>...</think>` si elle le souhaite. Les erreurs (`level == "error"`) ne sont jamais masquées.
 
 - Utilisation d'Ollama : Ollama est facultatif. Si vous fournissez `OPENAI_API_URL` (et facultativement `OPENAI_API_KEY`), l'API OpenAI-compatible sera utilisée par défaut.
 
