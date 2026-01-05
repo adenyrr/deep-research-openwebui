@@ -19,7 +19,7 @@ from open_webui.main import generate_chat_completions
 from open_webui.models.users import User
 
 name = "Deep Research at Home"
-__version__ = "0.3.0"
+__version__ = "0.5.0"
 
 
 def setup_logger():
@@ -433,6 +433,10 @@ class Pipe:
         STREAM_FINAL_ONLY: bool = Field(
             default=False,
             description="If True, suppress streaming of intermediate research/status messages and only emit final synthesis and errors",
+        )
+        STREAM_WRAP_MASKED: bool = Field(
+            default=False,
+            description="If True and STREAM_FINAL_ONLY is enabled, the server will wrap masked intermediate messages in <think>...</think> before sending",
         )
         USER_PREFERENCE_THROUGHOUT: bool = Field(
             default=True,
@@ -6016,12 +6020,19 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
 
             # If configured to stream final only and research is not completed, send a masked message
             if self.valves.STREAM_FINAL_ONLY and not state.get("research_completed", False):
-                # Send the raw content and mark it as masked and streaming; the UI should wrap it in <think> tags
+                # Determine content (optionally wrap server-side in <think> if configured)
+                content_to_send = message
+                if getattr(self.valves, "STREAM_WRAP_MASKED", False):
+                    try:
+                        content_to_send = f"<think>{message}</think>"
+                    except Exception:
+                        content_to_send = message
+
                 await self.__current_event_emitter__(
                     {
                         "type": "message",
                         "data": {
-                            "content": message,
+                            "content": content_to_send,
                             "masked": True,
                             "masked_stream": True,
                         },
@@ -6050,14 +6061,21 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
 
             # If configured to stream final only, send masked intermediate statuses (unless error)
             if self.valves.STREAM_FINAL_ONLY and not done and level != "error":
-                # Send the raw description and mark it masked; the UI should wrap masked content in <think> tags
+                # Send the raw description and mark it masked; optionally wrap server-side in <think> tags
+                description_to_send = message
+                if getattr(self.valves, "STREAM_WRAP_MASKED", False):
+                    try:
+                        description_to_send = f"<think>{message}</think>"
+                    except Exception:
+                        description_to_send = message
+
                 await self.__current_event_emitter__(
                     {
                         "type": "status",
                         "data": {
                             "status": "in_progress",
                             "level": level,
-                            "description": message,
+                            "description": description_to_send,
                             "done": done,
                             "masked": True,
                             "masked_stream": True,
@@ -7630,30 +7648,30 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
         # Create a prompt for generating the synthesis outline
         synthesis_outline_prompt = {
             "role": "system",
-            "content": f"""You are a post-graduate academic scholar reorganizing a research outline to be used in writing a comprehensive research report.
-			
-	Create a refined outline that condenses key topics/subtopics and insights from the current outline, and focuses on addressing the original query in areas best supported by the research.
-    Aim to have approximately {round((elapsed_cycles * 0.25) + 2)} main topics and {round((elapsed_cycles * 0.8) + 5)} subtopics in your revised outline.
+            "content": f"""Vous êtes un universitaire de niveau post‑universitaire chargé de réorganiser un plan de recherche destiné à la rédaction d'un rapport de recherche complet.
 
-    The original user query was: "{user_query}".
+Créez un plan affiné qui condense les sujets et sous‑sujets clés ainsi que les principaux enseignements du plan actuel, en vous concentrant sur les points qui répondent le mieux à la requête initiale. Visez environ {round((elapsed_cycles * 0.25) + 2)} sujets principaux et {round((elapsed_cycles * 0.8) + 5)} sous‑sujets dans votre plan révisé.
 
-    Your refined outline must:
-	1. Appropriately incorporate relevant new topics discovered along the way that are directly relevant to the research "core" and original user query.
-	2. Tailors the outline to reflect the progress and outcome of research activities without getting distracted by irrelevant results or specific examples, brands, locations, etc.
-    3. Unite how research has evolved, and the reference material obtained during research, with the initial purpose and scope, prioritizing the initial purpose and scope.
-    4. Where appropriate, reign in the representation of tangential research branches to refocus on topics more directly related to the original query.
+La requête utilisateur initiale était : "{user_query}".
 
-    Your refined outline must NOT:
-    1. Attempt to trump up, downplay, remove, soften, qualify, or otherwise modify the representation of research topics due to your own biases, preferences, or interests.
-    2. Include main topics intended to serve as an introduction or conclusion for the full report.
-    3. Focus on topics explored during research that don't actually serve to address the user's query or are fully tangent to it, or overly emphasize specific cases.
-    4. Include any other text - please only respond with the outline. 
-    
-    The goal is to create a refined outline reflecting a logical narrative and informational flow for the final comprehensive report based on the user's query and gathered research.
-	
-	Format your response as a valid JSON object with the following structure:
-	{{"outline": [
-	  {{"topic": "Main topic 1", "subtopics": ["Subtopic 1.1", "Subtopic 1.2"]}},
+Votre plan révisé DOIT :
+1. Intégrer de manière appropriée les nouveaux sujets pertinents découverts au cours de la recherche et directement liés au « noyau » de la recherche et à la requête initiale.
+2. Adapter le plan pour refléter les progrès et les résultats des activités de recherche sans se laisser distraire par des résultats non pertinents, des exemples précis, des marques, des lieux, etc.
+3. Unifier la façon dont la recherche a évolué et les documents de référence obtenus durant la recherche avec l'objectif et le périmètre initiaux, en priorisant ces derniers.
+4. Le cas échéant, recentrer les branches de recherche tangentielles pour se focaliser sur les sujets en lien direct avec la requête initiale.
+
+Votre plan révisé NE DOIT PAS :
+1. Altérer, minimiser, supprimer, tempérer ou modifier la représentation des sujets de recherche en raison de vos propres biais, préférences ou intérêts.
+2. Inclure des sujets principaux destinés à servir d'introduction ou de conclusion pour le rapport complet.
+3. Se concentrer sur des sujets explorés qui n'apportent rien à la requête de l'utilisateur ou qui en sont complètement tangents.
+4. Inclure tout autre texte — répondez uniquement par le plan.
+
+L'objectif est de produire un plan logique et fluide, adapté à la rédaction du rapport final à partir de la requête et des recherches collectées.
+
+Format de sortie attendu : un objet JSON valide avec la structure suivante :
+{"outline": [
+  {"topic": "Sujet principal 1", "subtopics": ["Sous‑sujet 1.1", "Sous‑sujet 1.2"]}},
+
 	  {{"topic": "Main topic 2", "subtopics": ["Subtopic 2.1", "Subtopic 2.2"]}}
 	]}}""",
         }
@@ -8528,27 +8546,26 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
         # Create a prompt for smoothing transitions
         smoothing_prompt = {
             "role": "system",
-            "content": f"""You are a post-grad research editor editing a section that combines multiple subtopics.
-            
-    Review the section content and improve it by:
-    1. Restructuring subtopic content and makeup to better fit the greater context of the section and full report
-    2. Ensuring consistent style and tone throughout the section and ensuring consistent use of proper Markdown
-    3. Maintaining the exact factual content in sentences with numerical citations [#]
-    4. Removing duplicate subtopic headings
-    5. Moving sentences or concepts between subsections as appropriate and revising subsection headers to fit the content
-    6. Removing any meta-commentary, e.g. "Okay, here's the section" or "I wrote the section while considering..."
-    7. Making the section read as though it were written by one person with a cohesive strategy for assembling the section
-    
-    DO NOT:
-    1. Remove, change, or edit ANY in-text citations or applied strikethrough
-    2. Alter, censor, re-analyze, or edit the factual content in ANY way
-    3. Add new information or qualifiers not present in the original
-    4. Decouple the factual content of a sentence from its specific citation
-    5. Include any introduction, conclusion, main title header, or meta-commentary - please return the section as requested with no other text
-    6. Combine sentences containing in-text citations and/or strikethrough
+            "content": f"""Vous êtes un éditeur de recherche (niveau post‑universitaire) chargé de réviser une section regroupant plusieurs sous‑sujets.
 
-    It is vitally important that your edits preserve the direct connection between any sentence and its in-text citation and/or applied strikethrough.
-    You may relocate or lightly edit sentences with in-text citations or strikethrough if appropriate, as long as they maintain these features.""",
+Examinez le contenu de la section et améliorez‑le en :
+1. Restructurant le contenu des sous‑sujets pour mieux l'intégrer au contexte global de la section et du rapport.
+2. Assurant une cohérence de style et de ton sur l'ensemble de la section et une utilisation correcte du Markdown.
+3. Conservant le contenu factuel exact des phrases comportant des citations numériques [#].
+4. Supprimant les titres de sous‑sujets en double.
+5. Déplacant des phrases ou concepts entre sous‑sections si nécessaire et révisant les en-têtes pour qu'ils correspondent au contenu.
+6. Supprimant toute méta‑commentaire du type « Voici la section » ou « J'ai écrit la section en considérant... ».
+7. Faisant en sorte que la section lise comme si elle avait été rédigée par une seule personne avec une stratégie cohérente d'assemblage.
+
+NE FAITES PAS :
+1. Supprimer, modifier ou éditer AUCUNE citation inline ou texte barré.
+2. Altérer, censurer, réexaminer ou modifier le contenu factuel de quelque manière que ce soit.
+3. Ajouter des informations nouvelles ou des précisions absentes de l'original.
+4. Dissocier le contenu factuel d'une phrase de sa citation spécifique.
+5. Inclure une introduction, une conclusion, un titre principal ou tout méta‑commentaire — renvoyez uniquement la section demandée sans autre texte.
+6. Combiner des phrases contenant des citations inline et/ou du texte barré.
+
+Il est essentiel de préserver la liaison directe entre chaque phrase et sa citation inline et/ou son texte barré. Vous pouvez déplacer ou éditer légèrement des phrases si elles conservent ces caractéristiques.""",
         }
 
         # Create context with the combined subtopics
@@ -8709,23 +8726,24 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
             # Create a verification prompt
             verify_prompt = {
                 "role": "system",
-                "content": f"""You are a post-grad research assistant verifying the accuracy of citations and cited sentences against source material.
-                
-            Examine the source content and verify accuracy of each snippet. A citation is considered verified if the source includes the cited information.
-            
-            It is imperative you actually confirm accuracy/applicability or lack of such for each citation via direct comparison to source - never try to rely on your own knowledge.
-            
-            Return your results as a JSON array with this format:
-            [
-              {{
-                "verified": true,
-                "global_id": "citation_id"
-              }},
-              {{
-                "verified": false,
-                "global_id": "citation_id"
-              }}
-            ]""",
+                "content": f"""Vous êtes un assistant de recherche (post‑universitaire) vérifiant l'exactitude des citations et des extraits cités par rapport aux sources.
+
+Examinez le contenu de la source et vérifiez l'exactitude de chaque extrait. Une citation est considérée vérifiée si la source contient l'information citée.
+
+Il est impératif de confirmer effectivement l'exactitude ou l'inapplicabilité de chaque citation par comparaison directe avec la source — ne vous fiez jamais à vos seules connaissances.
+
+Renvoyez vos résultats sous la forme d'un tableau JSON avec le format suivant :
+[
+  {
+    "verified": true,
+    "global_id": "citation_id"
+  },
+  {
+    "verified": false,
+    "global_id": "citation_id"
+  }
+]
+""",
             }
 
             # Create verification context with all citations from this source
@@ -9241,21 +9259,21 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
         """Review the compiled synthesis and suggest edits"""
         review_prompt = {
             "role": "system",
-            "content": """You are a post-grad research editor reviewing a comprehensive research report assembled per-section in different model contexts.
-	Your task is to identify any issues with this combination of multiple sections and the flow between them.
-	
-	Focus on:
-	1. Identifying areas needing better transitions between sections
-    2. Finding obvious anomalies in section generation or stylistic discrepancies large enough to be distracting
-	3. Making the report read as though it were written by one author who compiled these topics together for good purpose
-	
-	Do NOT:
-	1. Impart your own biases, interests, or preferences onto the report
-	2. Re-interpret the research information or soften its conclusions
-	3. Make useless or unnecessary revisions beyond the scope of ensuring flow from start to finish
-    4. Remove or edit ANY in-text citations or instances of applied strikethrough. These are for specific human review and MUST NOT be changed or decoupled
-    
-    For each suggested edit, provide exact text to find, and exact replacement text.
+            "content": """Vous êtes un éditeur de recherche (post‑universitaire) relisant un rapport de recherche complet assemblé section par section dans différents contextes modèles.
+Votre mission est d'identifier les problèmes liés à la combinaison des sections et à la cohérence d'ensemble.
+
+À prioriser :
+1. Identifier les endroits nécessitant de meilleures transitions entre sections
+2. Repérer les anomalies manifestes dans la génération de sections ou les écarts stylistiques suffisamment importants pour être déroutants
+3. Faire en sorte que le rapport se lise comme s'il avait été rédigé par un seul auteur coordonné
+
+NE PAS :
+1. Imposer vos propres biais, intérêts ou préférences au rapport
+2. Réinterpréter les informations de recherche ou atténuer ses conclusions
+3. Effectuer des révisions inutiles en dehors du périmètre visant à assurer la fluidité du début à la fin
+4. Supprimer ou modifier AUCUNE citation inline ni texte barré — ces éléments sont destinés à une revue humaine et NE DOIVENT PAS être changés
+
+Pour chaque modification proposée, fournissez le texte exact à remplacer et le texte de remplacement exact.""",
     Don't include any justification or reasoning for your replacements - they will be inserted directly, so please make sure they fit in context.
     
     Format your response as a JSON object with the following structure:
@@ -9416,17 +9434,16 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
         # Create a prompt to generate replacements
         replacement_prompt = {
             "role": "system",
-            "content": """You are a post-grad research assistant generating replacement topics for a research outline.
-    Based on the kept topics, original query, and user's preferences, generate new research topics to replace removed ones.
-    Each new topic should:
-    1. Be directly relevant to answering or addressing the original query
-    2. Be conceptually aligned with the kept topics
-    3. Avoid concepts related to removed topics and their associated themes
-    4. Be specific and actionable for research without devolving into hyperspecificity
-    
-    Generate EXACTLY the requested number of replacement topics in a numbered list format.
-    Each replacement should be thoughtful and unique, exploring and expanding on different aspects of the research subject.
-    """,
+            "content": """Vous êtes un assistant de recherche (post‑universitaire) générant des sujets de remplacement pour un plan de recherche.
+En vous basant sur les sujets conservés, la requête initiale et les préférences de l'utilisateur, générez de nouveaux sujets pour remplacer les éléments supprimés.
+Chaque nouveau sujet doit :
+1. Être directement pertinent pour répondre à la requête initiale
+2. Être conceptuellement aligné avec les sujets conservés
+3. Éviter les concepts liés aux sujets supprimés et à leurs thèmes associés
+4. Être suffisamment précis et actionnable pour guider la recherche sans devenir excessivement spécifique
+
+Générez EXACTEMENT le nombre demandé de sujets de remplacement sous forme de liste numérotée.
+Chaque proposition doit être réfléchie et unique, explorant différents aspects du sujet de recherche.""",
         }
 
         # Extract preference information
@@ -9587,27 +9604,28 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
         """Generate refined search queries for research topics with improved context"""
         query_prompt = {
             "role": "system",
-            "content": """You are a post-grad research assistant generating effective search queries.
-    Based on the user's original question, current research needs, and context provided, generate 4 precise search queries.
-    Each query should be specific, use relevant keywords, and be designed to find targeted information.
-    
-    Your queries should:
-    1. Directly address the priority research topics
-    2. Avoid redundancy with previous queries
-    3. Target information gaps in the current research
-    4. Be concise (6-12 words) but specific 
-    5. Include specialized terminology when appropriate
-    
-    Focus on core conceptual terms with targeted expansions and don't return heavy, clunky queries.
-    Use quotes sparingly and as a last resort. Never use multiple sets of quotes in the same query.
-    
-    Format your response as a valid JSON object with the following structure:
-    {"queries": [
-      "query": "search query 1", "topic": "related research topic", 
-      "query": "search query 2", "topic": "related research topic",
-      "query": "search query 3", "topic": "related research topic",
-      "query": "search query 4", "topic": "related research topic"
-    ]}""",
+            "content": """Vous êtes un assistant de recherche (post‑universitaire) générant des requêtes de recherche efficaces.
+En vous basant sur la question initiale de l'utilisateur, les besoins de recherche actuels et le contexte fourni, générez 4 requêtes de recherche précises.
+Chaque requête doit être spécifique, utiliser des mots‑clés pertinents et viser à trouver des informations ciblées.
+
+Vos requêtes doivent :
+1. Répondre directement aux sujets de recherche prioritaires
+2. Éviter les redondances avec des requêtes précédentes
+3. Cibler les lacunes d'information dans la recherche actuelle
+4. Être concises (6 à 12 mots) mais spécifiques
+5. Inclure une terminologie spécialisée si approprié
+
+Concentrez‑vous sur des termes conceptuels clés avec des extensions ciblées ; évitez les requêtes lourdes et confuses.
+Utilisez les guillemets avec parcimonie. N'utilisez jamais plusieurs paires de guillemets dans une même requête.
+
+Format de réponse attendu (objet JSON) :
+{"queries": [
+  {"query": "requête 1", "topic": "sujet lié"},
+  {"query": "requête 2", "topic": "sujet lié"},
+  {"query": "requête 3", "topic": "sujet lié"},
+  {"query": "requête 4", "topic": "sujet lié"}
+]}
+""",
         }
 
         message = {
@@ -9671,29 +9689,29 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
         """Generate a main title and subtitle for the research report"""
         titles_prompt = {
             "role": "system",
-            "content": """You are a post-grad research writer creating compelling titles for research reports.
-			
-	Create a main title and subtitle for a comprehensive research report. The titles should:
-	1. Be relevant and accurately reflect the content and focus of the research
-	2. Be engaging and professional. Intriguing, even
-	3. Follow academic/research paper conventions
-	4. Avoid clickbait or sensationalism unless it's really begging for it
-	
-	For main title:
-	- 5-12 words in length
-	- Clear and focused
-	- Appropriately formal for academic/research context
-	
-	For subtitle:
-	- 8-15 words in length
-	- Provides additional context and specificity
-	- Complements the main title without redundancy
-	
-	Format your response as a JSON object with the following structure:
-	{
-	  "main_title": "Your proposed main title",
-	  "subtitle": "Your proposed subtitle"
-	}""",
+            "content": """Vous êtes un rédacteur de recherche (post‑universitaire) chargé de proposer des titres percutants pour des rapports.
+
+Créez un titre principal et un sous‑titre pour un rapport de recherche complet. Les titres doivent :
+1. Être pertinents et refléter fidèlement le contenu et l'axe de la recherche
+2. Être engageants et professionnels
+3. Respecter les conventions académiques
+4. Éviter le sensationnalisme ou le clickbait sauf si c'est clairement approprié
+
+Pour le titre principal :
+- 5 à 12 mots
+- Clair et ciblé
+- Assez formel pour un contexte académique
+
+Pour le sous‑titre :
+- 8 à 15 mots
+- Fournit un contexte et une précision supplémentaires
+- Complète le titre principal sans redondance
+
+Format de réponse attendu (objet JSON) :
+{
+  "main_title": "Titre principal proposé",
+  "subtitle": "Sous‑titre proposé"
+}""",
         }
 
         # Create a context with the research query and a summary of the comprehensive answer
@@ -9759,22 +9777,22 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
         """Generate an abstract for the research report"""
         abstract_prompt = {
             "role": "system",
-            "content": f"""You are a post-grad research assistant writing an abstract for a comprehensive research report.
-			
-	Create a concise academic abstract (150-250 words) that summarizes the research report. The abstract should:
-	1. Outline the research objective and original intent without simply restating the original query
-	2. Summarize the key findings and their significance
-	3. Be written in an academic yet interesting tone
-	4. Be self-contained and understandable on its own
-    5. Draw you in by highlighting the interesting aspects of the research without being misleading or disingenuous
+"content": f"""Vous êtes un assistant de recherche (post‑universitaire) rédigant un résumé académique pour un rapport de recherche complet.
 
-    The abstract must NOT:
-    1. Interpret the content in a lofty way that exaggerates its importance or profundity, or contrives a narrative with empty sophistication. 
-    2. Attempt to portray the subject matter in any particular sort of light, good or bad, especially by using apologetic or dismissive language.
-    3. Focus on perceived complexities or challenges related to the topic or research process, or include appeals to future research.
-    4. Ever take a preachy or moralizing tone, or take a "stance" for or against/"side" with or against anything not driven by the provided data.
-    5. Overstate the significance of specific services, providers, locations, brands, or other entities beyond examples of some type or category.
-    6. Sound to the reader as though it is overtly attempting to be diplomatic, considerate, enthusiastic, or overly-generalized.
+Rédigez un abstract académique concis (150–250 mots) qui résume le rapport. L'abstract doit :
+1. Présenter l'objectif de la recherche et l'intention initiale sans se contenter de répéter la requête originale
+2. Résumer les principales conclusions et leur importance
+3. Être rédigé dans un ton académique mais engageant
+4. Être autonome et compréhensible sans le reste du rapport
+5. Susciter l'intérêt en mettant en évidence les aspects marquants de la recherche sans être trompeur
+
+L'abstract NE DOIT PAS :
+1. Interpréter le contenu de façon grandiloquente ou exagérer son importance
+2. Présenter le sujet sous un angle particulier (positif ou négatif) ni utiliser un ton apologétique ou méprisant
+3. S'attarder sur des complexités supposées du processus de recherche ou inclure des appels à des recherches futures
+4. Adopter un ton moralisateur ou prendre position sur des éléments non dictés par les données fournies
+5. Surévaluer l'importance de services, fournisseurs, lieux, marques ou autres entités au-delà d'exemples pertinents
+6. Donner l'impression d'être excessivement diplomatique, enthousiaste ou trop général.""",
 
 	The abstract should follow scientific paper abstract structure but be accessible to an educated general audience.""",
         }
@@ -10028,17 +10046,18 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
 
                 initial_query_prompt = {
                     "role": "system",
-                    "content": """You are a post-grad research assistant generating effective search queries for continued research based on an existing report.
-	Based on the user's follow-up question and the previous research summary, generate 6 initial search queries.
-	Each query should be specific, use relevant keywords, and be designed to find new information that builds on the previous research towards the new query.
-    Use quotes sparingly and as a last resort. Never use multiple sets of quotes in the same query.
-	
-	Format your response as a valid JSON object with the following structure:
-	{"queries": [
-	  "search query 1", 
-	  "search query 2",
-	  "search query 3"
-	]}""",
+                    "content": """Vous êtes un assistant de recherche (post‑universitaire) générant des requêtes efficaces pour poursuivre la recherche à partir d'un rapport existant.
+En vous basant sur la question de suivi et le résumé de recherche précédent, générez 6 requêtes initiales.
+Chaque requête doit être spécifique, utiliser des mots‑clés pertinents et viser à trouver de nouvelles informations permettant d'approfondir la recherche en réponse à la nouvelle question.
+Utilisez les guillemets avec parcimonie et seulement si nécessaire. N'utilisez jamais plusieurs paires de guillemets dans une même requête.
+
+Format de réponse attendu (objet JSON) :
+{"queries": [
+  "requête de recherche 1",
+  "requête de recherche 2",
+  "requête de recherche 3"
+]}
+""",
                 }
 
                 initial_query_messages = [
@@ -10143,21 +10162,22 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
 
                 outline_prompt = {
                     "role": "system",
-                    "content": """You are a post-grad research assistant creating a structured research outline.
-	Based on the user's follow-up question, previous research summary, and new search results, create a comprehensive outline 
-	that builds on the previous research while addressing the new aspects from the follow-up question.
-	
-	The outline should:
-	1. Include relevant topics from the previous research that provide context
-	2. Add new topics that specifically address the follow-up question
-	3. Be organized in a hierarchical structure with main topics and subtopics
-	4. Focus on aspects that weren't covered in depth in the previous research
-	
-	Format your response as a valid JSON object with the following structure:
-	{"outline": [
-	  {"topic": "Main topic 1", "subtopics": ["Subtopic 1.1", "Subtopic 1.2"]},
-	  {"topic": "Main topic 2", "subtopics": ["Subtopic 2.1", "Subtopic 2.2"]}
-	]}""",
+                    "content": """Vous êtes un assistant de recherche (post‑universitaire) créant un plan de recherche structuré.
+En vous basant sur la question de suivi, le résumé précédent et les nouveaux résultats, élaborez un plan complet
+qui s'appuie sur la recherche antérieure tout en abordant les nouvelles dimensions de la question de suivi.
+
+Le plan doit :
+1. Inclure les sujets pertinents de la recherche précédente pour fournir le contexte
+2. Ajouter de nouveaux sujets qui répondent spécifiquement à la question de suivi
+3. Être organisé de manière hiérarchique avec sujets principaux et sous‑sujets
+4. Se concentrer sur les aspects qui n'ont pas été traités en profondeur lors de la recherche précédente
+
+Format de réponse attendu (objet JSON) :
+{"outline": [
+  {"topic": "Sujet principal 1", "subtopics": ["Sous‑sujet 1.1", "Sous‑sujet 1.2"]},
+  {"topic": "Sujet principal 2", "subtopics": ["Sous‑sujet 2.1", "Sous‑sujet 2.2"]}
+]}
+""",
                 }
 
                 # Build context from initial search results and previous summary
@@ -10241,19 +10261,20 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
 
                 initial_query_prompt = {
                     "role": "system",
-                    "content": f"""You are a post-grad research assistant generating effective search queries.
-    The user has submitted a research query: "{user_message}".
-	Based on the user's input, generate 8 initial search queries to begin research and help us delineate the research topic.
-    Half of the queries should be broad, aimed at identifying and defining the main topic and returning core characteristic information about it.
-	The other half should be more specific, designed to find information to help expand on known base details of the user's query.
-    Use quotes sparingly and as a last resort. Never use multiple sets of quotes in the same query.
-	
-	Format your response as a valid JSON object with the following structure:
-	{{"queries": [
-	  "search query 1", 
-	  "search query 2",
-	  "search query 3..."
-	]}}""",
+                    "content": f"""Vous êtes un assistant de recherche (post‑universitaire) générant des requêtes efficaces.
+L'utilisateur a soumis la requête de recherche suivante : "{user_message}".
+En vous basant sur cette entrée, générez 8 requêtes initiales pour lancer la recherche et délimiter le sujet.
+La moitié des requêtes doit être large (identifier et définir le thème principal, fournir des informations générales),
+la moitié restante doit être plus spécifique (cibler des informations permettant d'approfondir des aspects connus de la requête).
+Utilisez les guillemets avec parcimonie et seulement si nécessaire. N'utilisez jamais plusieurs paires de guillemets dans une même requête.
+
+Format de réponse attendu (objet JSON) :
+{"queries": [
+  "requête 1",
+  "requête 2",
+  "requête 3..."
+]}
+""",
                 }
 
                 initial_query_messages = [
@@ -10360,23 +10381,23 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
 
                 outline_prompt = {
                     "role": "system",
-                    "content": f"""You are a post-graduate academic scholar tasked with creating a structured research outline.
-	Based on the user's query and the initial search results, create a comprehensive conceptual outline of additional information 
-	needed to completely and thoroughly address the user's original query: "{user_message}".
-	
-	The outline must:
-	1. Break down the query into key concepts that need to be researched and key details about important figures, details, methods, etc.
-	2. Be organized in a hierarchical structure, with main topics directly relevant to addressing the query, and subtopics to flesh out main topics.
-	3. Include topics discovered in the initial search results relevant to addressing the user's input, while ignoring overly-specific or unrelated topics.
+                    "content": f"""Vous êtes un universitaire de niveau post‑universitaire chargé de créer un plan de recherche structuré.
+En vous basant sur la requête de l'utilisateur et les résultats de recherche initiaux, élaborez un plan conceptuel complet des informations supplémentaires
+nécessaires pour traiter pleinement et minutieusement la requête : "{user_message}".
 
-    The outline MUST NOT:
-    1. Delve into philosophical or theoretical approaches, unless clearly appropriate to the subject or explicitly solicited by the user.
-    2. Include generic topics or subtopics, i.e. "considering complexities" or "understanding the question".
-    3. Reflect your own opinions, bias, notions, priorities, or other non-academic impressions of the area of research.
+Le plan doit :
+1. Décomposer la requête en concepts clés à explorer et en détails importants (personnes, méthodes, données, etc.).
+2. Être organisé de manière hiérarchique, avec des sujets principaux pertinents pour la requête et des sous‑sujets pour les détailler.
+3. Inclure les sujets découverts lors de la recherche initiale qui sont utiles à la requête, en ignorant les sujets trop spécifiques ou sans rapport.
 
-    Your outline should conceptually take up the entire space between an introduction and conclusion, filling in the entirety of the research volume.
-    Do NOT allow rendering artifacts, web site UI features, HTML/CSS/underlying website build language, or any other irrelevant text to distract you from your goal.
-    Don't add an appendix topic, nor an explicit introduction or conclusion topic. ONLY include the outline in your response.
+NE DOIT PAS :
+1. Plonger dans des approches philosophiques ou théoriques sauf si cela s'avère clairement pertinent ou explicitement demandé.
+2. Inclure des sujets génériques du type « considérer les complexités » ou « comprendre la question ».
+3. Refléter vos opinions personnelles, biais ou impressions non académiques.
+
+Votre plan doit couvrir l'espace conceptuel entre une introduction et une conclusion sans ajouter d'éléments superflus.
+Ne vous laissez pas distraire par des artefacts de rendu, éléments de l'interface web, HTML/CSS ou tout autre texte non pertinent.
+N'ajoutez ni annexe, ni introduction explicite, ni conclusion — répondez uniquement par le plan demandé.""",
 	
 	Format your response as a valid JSON object with the following structure:
 	{{"outline": [
@@ -10686,7 +10707,7 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
                 )
                 analysis_prompt = {
                     "role": "system",
-                    "content": f"""You are a post-grad researcher analyzing search results and updating a research outline.
+                    "content": f"""Vous êtes un chercheur (post‑universitaire) analysant des résultats de recherche et mettant à jour un plan de recherche.
 Examine the search results and the current research outline to assess the state of research.
 This is cycle {cycle} out of a maximum of {max_cycles} research cycles.
 Determine which topics have been adequately addressed by the search results.
@@ -11280,22 +11301,20 @@ Format your response as a valid JSON object with the following structure:
         await self.emit_synthesis_status("Generating introduction...")
         intro_prompt = {
             "role": "system",
-            "content": f"""You are a post-grad research assistant writing an introduction for a research report in response to this query: "{user_message}".
-                Create a concise introduction (2-3 paragraphs) that summarizes the purpose of the research and sets the stage for the report content.
+            "content": f"""Vous êtes un assistant de recherche (post‑universitaire) rédigeant une introduction pour un rapport de recherche en réponse à la requête : "{user_message}".
+Créez une introduction concise (2 à 3 paragraphes) qui résume l'objectif de la recherche et prépare le lecteur au contenu du rapport.
 
-            	The introduction should:
-                1. Set the stage for the subject matter and orient the reader toward what's to come.
-            	2. Introduce the research objective and original intent without simply restating the original query.
-            	3. Describe key details or aspects of the subject matter to be explored in the report.
-            
-                The introduction must NOT:
-                1. Interpret the content in a lofty way that exaggerates its importance or profundity, or contrives a narrative with empty sophistication. 
-                2. Attempt to portray the subject matter in any particular sort of light, good or bad, especially by using apologetic or dismissive language.
-                3. Focus on perceived complexities or challenges related to the topic or research process, or include appeals to future research.
-                
-                The introduction should establish the context of the original query, state the research question, and briefly outline the approach taken to answering it. 
-                Do not add your own bias or sentiment to the introduction. Do not include general statements about the research process itself.
-                Please only respond with your introduction - do not include any segue, commentary, explanation, etc.""",
+L'introduction doit :
+1. Situer le sujet et orienter le lecteur sur ce qui va suivre.
+2. Présenter l'objectif de recherche et l'intention initiale sans reproduire mot à mot la requête.
+3. Décrire brièvement les principaux aspects du sujet qui seront explorés.
+
+L'introduction NE DOIT PAS :
+1. Interpréter le contenu de manière grandiloquente ni exagérer son importance.
+2. Présenter le sujet sous un angle particulier (favorable ou défavorable) ni employer un ton apologétique ou méprisant.
+3. S'attarder sur des complexités supposées ou inclure des appels à des recherches futures.
+
+Elle doit établir le contexte de la requête, énoncer la question de recherche et esquisser l'approche utilisée. N'ajoutez pas de biais personnel ni de commentaires sur le processus de recherche. Répondez uniquement par l'introduction demandée.""",
         }
 
         intro_context = f"Research Query: {user_message}\n\nResearch Outline:"
@@ -11369,20 +11388,21 @@ Format your response as a valid JSON object with the following structure:
         await self.emit_synthesis_status("Generating conclusion...")
         concl_prompt = {
             "role": "system",
-            "content": f"""You are a post-grad research assistant writing a comprehensive conclusion for a research report in response to this query: "{user_message}".
-                Create a concise conclusion (2-4 paragraphs) that synthesizes the key findings and insights from the research.
-                
-                The conclusion should:
-            	1. Restate the research objective and original intent from what has become a more knowing and researched standpoint.
-            	2. Highlight the most important research discoveries and their significance to the original topic and user query.
-                3. Focus on the big picture characterizing the research and topic as a whole, using researched factual content as support.
-                4. Definitively address the subject matter, focusing on what we know about it rather than what we don't.
-                5. Acknowledge significant tangents in research, but ultimately remain focused on the original topic and user query.
-            
-                The conclusion must NOT:
-                1. Interpret the content in a lofty way that exaggerates its importance or profundity, or contrives a narrative with empty sophistication. 
-                2. Attempt to portray the subject matter in any particular sort of light, good or bad, especially by using apologetic or dismissive language.
-                3. Focus on perceived complexities or challenges related to the topic or research process, or include appeals to future research.
+            "content": f"""Vous êtes un assistant de recherche (post‑universitaire) rédigeant une conclusion complète pour un rapport de recherche en réponse à la requête : "{user_message}".
+Créez une conclusion concise (2 à 4 paragraphes) synthétisant les principaux résultats et enseignements de la recherche.
+
+La conclusion doit :
+1. Reprendre l'objectif de recherche et l'intention initiale à la lumière des recherches effectuées.
+2. Mettre en évidence les découvertes les plus importantes et leur portée par rapport à la requête initiale.
+3. Se concentrer sur la vision d'ensemble caractérisant la recherche et le sujet, en s'appuyant sur des faits vérifiés.
+4. Traiter de façon décisive le sujet en insistant sur ce que nous savons plutôt que sur ce que nous ignorons.
+5. Reconnaître les digressions significatives, tout en restant centré sur la requête initiale.
+
+La conclusion NE DOIT PAS :
+1. Interpréter le contenu de façon grandiloquente ou exagérer son importance.
+2. Présenter le sujet sous un angle particulier (positif ou négatif) ni utiliser un ton apologétique ou méprisant.
+3. S'attarder sur des complexités supposées ou inclure des appels à des recherches futures.
+""",
                 4. Ever take a preachy or moralizing tone, or take a "stance" for or against/"side" with or against anything not driven by the provided data.
                 5. Overstate the significance of specific services, providers, locations, brands, or other entities beyond examples of some type or category.
                 6. Sound to the reader as though it is overtly attempting to be diplomatic, considerate, enthusiastic, or overly-generalized.

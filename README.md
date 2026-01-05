@@ -1,6 +1,6 @@
 ### Deep Research At Home! 
 
-**Version:** 0.1.0
+**Version:** 0.5.0
 
 This script performs advanced AI research and returns a comprehensive research report that cites its sources and verifies those citations. 
 
@@ -213,7 +213,7 @@ p.valves.STREAM_FINAL_ONLY = True
 ```
 
 - Détails d'affichage :
-# Les événements ont maintenant un champ `masked: True`. Les messages intermédiaires sont envoyés en clair mais avec `masked=True` et `masked_stream=True`; l'interface peut les afficher enveloppés dans `<think>...</think>` si elle le souhaite. Les erreurs (`level == "error"`) ne sont jamais masquées.
+# Les événements ont maintenant un champ `masked: True`. Les messages intermédiaires sont envoyés en clair mais avec `masked=True` et `masked_stream=True`; par défaut l'interface peut les afficher enveloppés dans `<think>...</think>`. Si vous préférez, le serveur peut lui‑même encapsuler ces messages côté serveur en activant `p.valves.STREAM_WRAP_MASKED = True`. Les erreurs (`level == "error"`) ne sont jamais masquées.
 
 - Utilisation d'Ollama : Ollama est facultatif. Si vous fournissez `OPENAI_API_URL` (et facultativement `OPENAI_API_KEY`), l'API OpenAI-compatible sera utilisée par défaut.
 
