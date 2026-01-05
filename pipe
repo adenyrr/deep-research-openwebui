@@ -19,7 +19,7 @@ from open_webui.main import generate_chat_completions
 from open_webui.models.users import User
 
 name = "Deep Research at Home"
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 
 def setup_logger():
@@ -4575,28 +4575,28 @@ class Pipe:
         # Create a prompt for identifying and correlating URL citations
         citation_prompt = {
             "role": "system",
-            "content": """You are a master librarian identifying non-exclusively-numeric citations in research content.
+            "content": """Vous êtes un bibliothécaire spécialisé chargé d'identifier les citations non exclusivement numériques dans du contenu de recherche.
             
-            Focus ONLY on identifying non-numeric citations that appear inside brackets, such as [https://example.com] or [Reference 1].
-            IGNORE all numerical citations like [1], [2], etc. as those have already been identified and correlated.
+            Concentrez-vous UNIQUEMENT sur les citations non numériques qui apparaissent entre crochets, par exemple [https://example.com] ou [Référence 1].
+            IGNOREZ toutes les citations numériques comme [1], [2], etc., car elles ont déjà été identifiées et corrélées.
             
-            For each non-numerical citation you identify, extract:
-            1. The exact content inside the brackets
-            2. The citation text exactly as it appears in the original text, including brackets
-            3. The surrounding sentence to which the citation pertains
-            4. A representative title for the source (10 words or less)
+            Pour chaque citation non numérique que vous identifiez, extrayez :
+            1. Le contenu exact à l'intérieur des crochets
+            2. Le texte de la citation tel qu'il apparaît dans le texte original, y compris les crochets
+            3. La phrase environnante à laquelle la citation se rapporte
+            4. Un titre représentatif pour la source (10 mots ou moins)
             
-            Your response must only contain the identified citations as requested. Format your response as a valid JSON object with this structure:
+            Votre réponse doit contenir uniquement les citations identifiées selon ces demandes. Formatez votre réponse comme un objet JSON valide de la structure suivante :
             {
               "citations": [
                 {
-                  "marker": "Source Name",
-                  "raw_text": "[Source Name]",
-                  "text": "surrounding sentence containing the citation",
+                  "marker": "Nom de la source",
+                  "raw_text": "[Nom de la source]",
+                  "text": "phrase entourant la citation",
                   "url": "https://example.com",
-                  "suggested_title": "Descriptive Title for Source"
+                  "suggested_title": "Titre descriptif de la source"
                 },
-                ...
+"                ...
               ]
             }""",
         }
@@ -5527,17 +5527,17 @@ class Pipe:
         # Create prompt for relevance checking
         relevance_prompt = {
             "role": "system",
-            "content": """You are evaluating the relevance of a search result to a research query. 
-Your task is to determine if the content is actually relevant to what the user is researching.
+            "content": """Vous évaluez la pertinence d'un résultat de recherche par rapport à une requête de recherche.
+Votre tâche est de déterminer si le contenu est réellement pertinent pour ce que recherche l'utilisateur.
 
-Answer with ONLY "Yes" if the content is relevant to the research query or "No" if it is:
-- Not related to the core topic
-- An advertisement disguised as content
-- About a different product/concept with similar keywords
-- So general or vague that it provides no substantive information
-- Littered with HTML or CSS to the point of being unreadable
+Répondez UNIQUEMENT « Oui » si le contenu est pertinent pour la requête de recherche, ou « Non » si le contenu :
+- N'est pas lié au sujet central
+- Est une publicité déguisée en contenu
+- Concerne un produit/concept différent utilisant des mots-clés similaires
+- Est trop général ou vague pour fournir une information substantielle
+- Contient trop d'HTML/CSS rendant le texte illisible
 
-Reply with JUST "Yes" or "No" - no explanation or other text.""",
+Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte supplémentaire.""",
         }
 
         # Create context with query, outline, and full content
@@ -6511,17 +6511,17 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
         # Create a prompt for the model to interpret user feedback
         interpret_prompt = {
             "role": "system",
-            "content": """You are a post-grad research assistant analyzing user feedback on a research outline.
-	Based on the user's natural language input, determine which research topics should be kept or removed.
+            "content": """Vous êtes un assistant de recherche (niveau post-universitaire) analysant le retour utilisateur sur un plan de recherche.
+	À partir du texte libre de l'utilisateur, déterminez quels sujets de recherche doivent être conservés ou supprimés.
 	
-	The user's message expresses preferences about the research direction. Analyze this to identify:
-	1. Which specific topics from the outline align with their interests
-	2. Which specific topics should be removed based on their preferences
+	Le message de l'utilisateur exprime des préférences sur la direction de recherche. Analysez-le pour identifier :
+	1. Quels sujets précis de l'outline correspondent à ses intérêts
+	2. Quels sujets doivent être supprimés selon ses préférences
 	
-	Your task is to categorize each topic as EITHER "keep" OR "remove", NEVER both, based on the user's natural language feedback.
-    Don't allow your own biases or preferences to have any affect on your answer - please remain purely objective and user research-oriented.
-	Provide your response as a JSON object with two lists: "keep" for indices to keep, and "remove" for indices to remove.
-	Indices should be 0-based (first item is index 0).""",
+	Votre tâche est de classer chaque sujet comme SOIT "keep" SOIT "remove", JAMAIS les deux, en vous basant sur le retour naturel de l'utilisateur.
+	Ne laissez pas vos biais personnels influencer la réponse — restez strictement objectif et centré sur la recherche utilisateur.
+	Fournissez votre réponse sous la forme d'un objet JSON avec deux listes : "keep" pour les indices à conserver et "remove" pour les indices à supprimer.
+	Les indices doivent être 0-based (le premier élément a l'indice 0).""",
         }
 
         # Prepare context with list of topics and user message
@@ -6879,10 +6879,10 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
         # Create a prompt for generating the query
         prompt = {
             "role": "system",
-            "content": """You are a post-grad research assistant generating an effective search query. 
-	Create a search query that will find relevant information for a group of related topics aimed at addressing the original user input.
-	The query should be specific enough to find targeted information while broadly representing all topics in the group.
-	Make the query concise (maximum 10 words) and focused.""",
+            "content": """Vous êtes un assistant de recherche (niveau post-universitaire) générant une requête de recherche efficace.
+	Créez une requête qui trouvera des informations pertinentes pour un groupe de sujets liés, en lien avec la demande initiale de l'utilisateur.
+	La requête doit être suffisamment spécifique pour trouver des informations ciblées tout en représentant globalement l'ensemble des sujets du groupe.
+	Rendez la requête concise (maximum 10 mots) et ciblée.""",
         }
 
         # Create the message content
@@ -6929,10 +6929,10 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
         # Create a prompt for extracting relevant information
         extraction_prompt = {
             "role": "system",
-            "content": """You are a post-grad research assistant extracting information from search results.
-	Identify and extract information that is specifically relevant to the given topics.
-	Format the extracted information as concise bullet points, focusing on facts, data, and insights.
-	Ignore general information not directly related to the topics.""",
+            "content": """Vous êtes un assistant de recherche (niveau post-universitaire) chargé d'extraire des informations pertinentes des résultats de recherche.
+	Identifiez et extrayez les informations spécifiquement liées aux sujets donnés.
+	Formatez les informations extraites en points concis, en vous concentrant sur les faits, les données et les insights.
+	Ignorez les informations générales qui ne sont pas directement liées aux sujets.""",
         }
 
         # Create context with search results and topics
@@ -6978,15 +6978,15 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
         # Create a prompt for refining topics
         refine_prompt = {
             "role": "system",
-            "content": """You are a post-grad research assistant refining research topics.
-	Based on the extracted information and user preferences, revise each topic to:
-	1. Be specific and targeted based on the research findings, while maintaining alignment with user preferences and the original query
-	2. Prioritize topics that seem most relevant to answering the query and that will reasonably result in worthwhile expanded research
-	3. Be phrased as clear, researchable topics in the same style as those to be replaced
+            "content": """Vous êtes un assistant de recherche (niveau post-universitaire) chargé d'affiner des sujets de recherche.
+	À partir des informations extraites et des préférences utilisateur, révisez chaque sujet pour :
+	1. Être spécifique et ciblé en fonction des résultats de recherche, tout en restant aligné sur les préférences de l'utilisateur et la requête initiale
+	2. Prioriser les sujets qui semblent les plus pertinents pour répondre à la requête et qui mèneront à des recherches utiles
+	3. Être formulés comme des sujets clairs et investigables, dans le même style que ceux à remplacer
 	
-	Your refined topics should incorporate new discoveries that heighten and expand upon the intent of the original query.
-    Avoid overstating the significance of specific services, providers, locations, brands, or other entities beyond examples of some type or category.
-    You do not need to include justification along with your refined topics.""",
+	Vos sujets raffinés doivent intégrer les nouvelles découvertes qui précisent et enrichissent l'intention de la requête initiale.
+	Évitez de surévaluer l'importance de services, fournisseurs, lieux, marques ou autres entités au-delà d'exemples génériques.
+	Vous n'avez pas besoin d'inclure des justifications pour vos sujets raffinés.""",
         }
 
         # Create context with topics, research info, and preference direction
@@ -7542,11 +7542,11 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
         # Create a prompt to generate the group title
         title_prompt = {
             "role": "system",
-            "content": """You are a post-grad research assistant creating a concise descriptive title for a group of related research topics.
-    Create a short, clear title (4-8 words) that captures the common theme across these topics.
-    The title should be specific enough to distinguish this group from others, but general enough to encompass all topics.
-    DO NOT use generic phrases like "Research Group" or "Topic Group".
-    Respond with ONLY the title text.""",
+            "content": """Vous êtes un assistant de recherche (niveau post-universitaire) créant un titre descriptif concis pour un groupe de sujets.
+    Créez un titre court et clair (4-8 mots) qui capture le thème commun à ces sujets.
+    Le titre doit être suffisamment spécifique pour distinguer ce groupe, tout en étant assez général pour englober tous les sujets.
+    N'UTILISEZ PAS des formulations génériques comme "Groupe de recherche" ou "Groupe thématique".
+    Répondez UNIQUEMENT par le texte du titre.""",
         }
 
         # Create the message content with full topics
@@ -7872,27 +7872,27 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
         # Create a prompt specific to this subtopic
         subtopic_prompt = {
             "role": "system",
-            "content": f"""You are a post-grad research assistant writing a concise subsection (1-3 paragraphs) about "{subtopic}" 
-        for a comprehensive combined research report addressing this query: "{original_query}" based on internet research results.
+            "content": f"""Vous êtes un assistant de recherche (niveau post-universitaire) rédigant une sous-section concise (1-3 paragraphes) sur « {subtopic} »
+        pour un rapport de recherche combiné répondant à la requête : « {original_query} », basé sur les résultats de recherche Internet fournis.
         
-        Your subsection MUST:
-        1. Focus specifically on the subtopic "{subtopic}" within the broader section "{section_title}".
-        2. Make FULL use of the provided research sources, and ONLY the provided sources.
-        3. Include IN-TEXT CITATIONS for all information from sources, using ONLY the numerical IDs provided in the source list, e.g. [1], [4], etc.
-        4. Follow a structure that best fits the subtopic subject matter. Aim for an academic report style while tolerating flexibility as appropriate.
-        5. Only be written on the subtopic matter - consider how your subsection will be combined with others in a greater research report.
-        6. Be written to a length, between 1 medium paragraph and 3 long paragraphs, based on the subtopic's perceived importance to the research query.
+        Votre sous-section DOIT :
+        1. Se concentrer spécifiquement sur le sous-sujet « {subtopic} » au sein de la section plus large « {section_title} ».
+        2. Utiliser PLEINEMENT les sources de recherche fournies, et SEULEMENT ces sources.
+        3. Inclure des CITATIONS DANS LE TEXTE pour toute information provenant des sources, en utilisant UNIQUEMENT les identifiants numériques fournis (ex. [1], [4], etc.).
+        4. Suivre la structure la plus adaptée au sujet; viser un style académique tout en restant flexible si nécessaire.
+        5. Ne traiter que du sujet de la sous-section – réfléchissez à la manière dont cette sous-section sera combinée à d'autres dans le rapport.
+        6. Avoir une longueur appropriée : entre 1 paragraphe moyen et 3 paragraphes longs, selon l'importance perçue du sous-sujet pour la requête.
         
-        Your subsection must NOT:
-        1. Interpret the content in a lofty way that exaggerates its importance or profundity, or contrives a narrative with empty sophistication. 
-        2. Attempt to portray the subject matter in any particular sort of light, good or bad, especially by using apologetic or dismissive language.
-        3. Focus on perceived complexities or challenges related to the topic or research process, or include appeals to future research.
-        4. Ever take a preachy or moralizing tone, or take a "stance" for or against/"side" with or against anything not driven by the provided data.
-        5. Overstate the significance of specific services, providers, locations, brands, or other entities beyond examples of some type or category.
-        6. Sound to the reader as though it is overtly attempting to be diplomatic, considerate, enthusiastic, or overly-generalized.
+        Votre sous-section NE DOIT PAS :
+        1. Interpréter le contenu de manière grandiloquente ou exagérer son importance, ni forger un récit sophistiqué sans fond.
+        2. Chercher à présenter le sujet sous un angle particulier (favorable ou défavorable) ou utiliser un ton apologétique ou méprisant.
+        3. S'attarder sur des complexités supposées du processus de recherche ni inclure des appels à des recherches futures.
+        4. Avoir un ton moralisateur ou prendre position sur des éléments non dictés par les données fournies.
+        5. Surévaluer l'importance de services, fournisseurs, lieux, marques ou autres entités au-delà d'exemples illustratifs.
+        6. Donner l'impression d'être excessivement diplomatique, enthousiaste ou trop général.
     
-        You must accurately cite your sources to avoid plagiarizing. Citations MUST be numerical and correspond to the correct source ID in the provided list.
-        Do not combine multiple IDs in one citation tag. Please respond with just the subsection body, no intro or title.""",
+        Vous devez citer précisément vos sources pour éviter le plagiat. Les citations DOIVENT être numériques et correspondre aux identifiants corrects fournis dans la liste des sources.
+        Ne combinez pas plusieurs identifiants dans une même balise de citation. Répondez uniquement par le texte de la sous-section, sans titre ni introduction.""",
         }
 
         # Create a combined embedding for query + subtopic with state-level caching
