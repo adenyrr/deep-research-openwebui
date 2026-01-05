@@ -1,3 +1,12 @@
+"""
+title: Deep Search
+author: open-webui, atgehrhardt, adenyrr
+author_url: https://github.com/adenyrr
+funding_url: https://github.com/open-webui
+version: 0.0.5
+required_open_webui_version: 0.5.xx
+"""
+
 import logging
 import json
 import math
