@@ -10853,20 +10853,26 @@ Format your response as a valid JSON object with the following structure:
                         "content"
                     ]
 
-                    # Extract JSON from response
-                    analysis_json_str = analysis_content[
-                        # Use robust JSON fragment extraction
-                        try:
-                            parsed = self._extract_json_fragment(analysis_content)
-                            if isinstance(parsed, dict):
-                                analysis_data = parsed
+                    # Extract JSON from response using robust helper
+                    try:
+                        parsed = self._extract_json_fragment(analysis_content)
+                        if isinstance(parsed, dict):
+                            analysis_data = parsed
+                        else:
+                            # If fragment extractor returned non-dict, try to extract JSON substring
+                            json_start = analysis_content.find("{")
+                            json_end = analysis_content.rfind("}")
+                            if json_start != -1 and json_end > json_start:
+                                analysis_json_str = analysis_content[json_start:json_end + 1]
+                                try:
+                                    analysis_data = json.loads(analysis_json_str)
+                                except Exception:
+                                    analysis_data = {}
                             else:
                                 analysis_data = {}
-                        except Exception as e:
-                            logger.error(f"Error parsing analysis JSON: {e}")
-                            analysis_data = {}
-                    ]
-                    analysis_data = json.loads(analysis_json_str)
+                    except Exception as e:
+                        logger.error(f"Error parsing analysis JSON: {e}")
+                        analysis_data = {}
 
                     # Update completed topics
                     newly_completed = set(analysis_data.get("completed_topics", []))
