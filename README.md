@@ -150,6 +150,59 @@ While research expanded into areas such as remediation technologies and legal ch
 
 **Token Usage Statistics**
 
+---
+
+## 🔧 Configuration des embeddings et streaming (exemples)
+
+- Activer une API compatible OpenAI (ex. OpenRouter / Mistral) :
+
+```python
+p = Pipe()
+p.valves.OPENAI_API_URL = "https://api.openrouter.ai/v1"
+p.valves.OPENAI_API_KEY = "sk_..."
+# Modèles selon votre fournisseur
+p.valves.RESEARCH_MODEL = "mistral-large"
+p.valves.EMBEDDING_MODEL = "text-embedding-3-large"
+```
+
+- Contrôler le batching / async des embeddings :
+
+```python
+p.valves.EMBEDDING_BATCH_SIZE = 16        # 1 = pas de batching
+p.valves.EMBEDDING_BATCH_ASYNC = True     # exécute les batches concurrents
+p.valves.EMBEDDING_BATCH_TIMEOUT = 30     # timeout par batch (s)
+```
+
+- Configurer le chunking des textes longs pour embeddings :
+
+```python
+p.valves.EMBEDDING_CHUNK_SIZE = 1200      # taille max (caractères) par chunk
+p.valves.EMBEDDING_CHUNK_OVERLAP = 200    # overlap (caractères) entre chunks
+```
+
+- Exemple de streaming de complétion (OpenAI-compatible requis) :
+
+```python
+async def on_stream(partial):
+    if partial is None:
+        print("[STREAM DONE]")
+        return
+    print(partial, end="", flush=True)
+
+await p.generate_completion(
+    model=p.get_research_model(),
+    messages=[{"role":"user","content":"Fais un résumé court de ceci."}],
+    stream=True,
+    stream_handler=on_stream
+)
+```
+
+Cette configuration vous permet d'utiliser OpenRouter/Mistral pour les embeddings et la génération, de paralléliser les batches d'embeddings et de gérer le streaming des réponses en temps réel.
+
+---
+
+
+
 - Research Results: 123956 tokens
 - Final Synthesis: 5649 tokens
 - Total: 134703 tokens

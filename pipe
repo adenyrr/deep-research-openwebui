@@ -292,6 +292,43 @@ class Pipe:
         OLLAMA_URL: str = Field(
             default="http://localhost:11434", description="URL for Ollama API"
         )
+        OPENAI_API_URL: str = Field(
+            default="", description="Base URL for an OpenAI-compatible API (e.g., https://api.openrouter.ai/v1 or https://api.openai.com/v1). If set, this will be used instead of Ollama."
+        )
+        OPENAI_API_KEY: str = Field(
+            default="", description="Bearer token / API key for the OpenAI-compatible API (optional)"
+        )
+
+        # Embedding batching / chunking options
+        EMBEDDING_BATCH_SIZE: int = Field(
+            default=1,
+            description="Number of texts per embeddings batch request (set 1 for no batching)",
+            ge=1,
+            le=256,
+        )
+        EMBEDDING_BATCH_ASYNC: bool = Field(
+            default=False,
+            description="If true, perform embedding batches concurrently (async)",
+        )
+        EMBEDDING_BATCH_TIMEOUT: int = Field(
+            default=30,
+            description="Timeout (seconds) per embeddings batch request",
+            ge=5,
+            le=120,
+        )
+        EMBEDDING_CHUNK_SIZE: int = Field(
+            default=1000,
+            description="Maximum chunk size (characters) when splitting long texts for embeddings",
+            ge=200,
+            le=10000,
+        )
+        EMBEDDING_CHUNK_OVERLAP: int = Field(
+            default=200,
+            description="Overlap (characters) between adjacent chunks",
+            ge=0,
+            le=2000,
+        )
+
         SEARCH_URL: str = Field(
             default="http://192.168.1.1:8888/search?q=",
             description="URL for web search API",
@@ -591,17 +628,44 @@ class Pipe:
         return [{"id": f"{name}-pipe", "name": f"{name} Pipe"}]
 
     async def count_tokens(self, text: str) -> int:
-        """Count tokens in text using Ollama API"""
+        """Count tokens in text using local tiktoken if available, otherwise use heuristics.
+
+        Behavior:
+        - If tiktoken is installed, use it for model-accurate counts.
+        - If OPENAI_API_URL is configured but tiktoken is not available, fall back to a heuristic.
+        - Otherwise, attempt the Ollama tokenize endpoint as a legacy fallback.
+        """
         if not text:
             return 0
 
+        # Try to use tiktoken for an accurate token count if available
         try:
-            # Use Ollama's tokenize endpoint with the specified model
+            import tiktoken
+
+            model = self.valves.RESEARCH_MODEL or "gpt-3.5-turbo"
+            try:
+                enc = tiktoken.encoding_for_model(model)
+            except Exception:
+                enc = tiktoken.get_encoding("cl100k_base")
+            tokens = len(enc.encode(text))
+            return tokens
+        except Exception:
+            # tiktoken not available or failed; continue to fallbacks
+            pass
+
+        # If an OpenAI-compatible API is configured, we don't rely on a remote tokenize endpoint,
+        # so use a heuristic estimate (words * 1.3)
+        if self.valves.OPENAI_API_URL:
+            words = text.split()
+            return int(len(words) * 1.3)
+
+        # Legacy Ollama tokenize endpoint fallback
+        try:
             connector = aiohttp.TCPConnector(force_close=True)
             async with aiohttp.ClientSession(connector=connector) as session:
                 payload = {
                     "model": self.valves.RESEARCH_MODEL,
-                    "prompt": text,  # Do not limit length for token counting
+                    "prompt": text,
                 }
 
                 async with session.post(
@@ -610,7 +674,6 @@ class Pipe:
                     if response.status == 200:
                         result = await response.json()
                         tokens = result.get("tokens", [])
-                        # If we got only a partial count due to truncation, estimate full count
                         if len(text) > 2000:
                             ratio = len(text) / 2000
                             return int(len(tokens) * ratio)
@@ -618,60 +681,167 @@ class Pipe:
         except Exception as e:
             logger.error(f"Error counting tokens with Ollama API: {e}")
 
-        # Fallback to simple estimation if API call fails
+        # Final fallback heuristic
         words = text.split()
         return int(len(words) * 1.3)  # Approximate token count using words
 
-    async def get_embedding(self, text: str) -> Optional[List[float]]:
-        """Get embedding for a text string using the configured embedding model with caching"""
+    def _split_text_chunks(self, text: str, chunk_size: int, overlap: int) -> List[str]:
+        """Split a text into overlapping chunks by characters.
+
+        Returns a list of chunks where each chunk is at most chunk_size in length and adjacent chunks overlap by `overlap`.
+        """
+        if not text or chunk_size <= 0:
+            return [text]
+
+        if len(text) <= chunk_size:
+            return [text]
+
+        chunks = []
+        start = 0
+        while start < len(text):
+            end = start + chunk_size
+            chunk = text[start:end]
+            chunks.append(chunk)
+            if end >= len(text):
+                break
+            start = end - overlap if overlap < chunk_size else end
+        return chunks
+
+    async def _get_embeddings_batch(self, texts: List[str], batch_size: Optional[int] = None, async_batch: Optional[bool] = None, timeout: Optional[int] = None) -> List[Optional[List[float]]]:
+        """Get embeddings for a list of texts using batching and optional concurrent batches.
+
+        Returns a list of embeddings or None for each input text in the same order.
+        """
+        if not texts:
+            return []
+
+        # Normalize options from valves if not provided
+        batch_size = batch_size or self.valves.EMBEDDING_BATCH_SIZE
+        async_batch = self.valves.EMBEDDING_BATCH_ASYNC if async_batch is None else async_batch
+        timeout = timeout or self.valves.EMBEDDING_BATCH_TIMEOUT
+
+        # Check cache first to avoid unnecessary calls
+        to_request = []  # list of (idx, text) needing API call
+        results: List[Optional[List[float]]] = [None] * len(texts)
+        for i, t in enumerate(texts):
+            key = t
+            cached = self.embedding_cache.get(key)
+            if cached is not None:
+                results[i] = cached
+            else:
+                to_request.append((i, t))
+
+        if not to_request:
+            return results
+
+        # Build batches
+        batches: List[List[Tuple[int, str]]] = []
+        for i in range(0, len(to_request), batch_size):
+            batches.append(to_request[i : i + batch_size])
+
+        async def _req_batch(batch: List[Tuple[int, str]]):
+            indices, batch_texts = zip(*batch)
+            payload = {"model": self.valves.EMBEDDING_MODEL, "input": list(batch_texts)}
+            try:
+                connector = aiohttp.TCPConnector(force_close=True)
+                async with aiohttp.ClientSession(connector=connector) as session:
+                    # OpenAI-compatible batch endpoint
+                    if self.valves.OPENAI_API_URL:
+                        base = self.valves.OPENAI_API_URL.rstrip('/')
+                        if not base.endswith('/v1'):
+                            base = base + '/v1'
+                        headers = {'Content-Type': 'application/json'}
+                        if self.valves.OPENAI_API_KEY:
+                            headers['Authorization'] = f"Bearer {self.valves.OPENAI_API_KEY}"
+
+                        async with session.post(f"{base}/embeddings", json=payload, timeout=timeout, headers=headers) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                if "data" in data:
+                                    for idx, item in enumerate(data["data"]):
+                                        emb = item.get("embedding")
+                                        if emb is not None:
+                                            results[indices[idx]] = emb
+                                            # cache by original text key
+                                            self.embedding_cache.set(batch_texts[idx], emb)
+                                    return
+                            text = await resp.text()
+                            logger.error(f"Embeddings batch error {resp.status}: {text}")
+
+                    # Fall back to Ollama per-item requests
+                    for j, txt in enumerate(batch_texts):
+                        try:
+                            payload_single = {"model": self.valves.EMBEDDING_MODEL, "input": txt}
+                            async with session.post(f"{self.valves.OLLAMA_URL}/api/embed", json=payload_single, timeout=timeout) as resp2:
+                                if resp2.status == 200:
+                                    dat = await resp2.json()
+                                    if "embedding" in dat:
+                                        emb = dat.get("embedding")
+                                    elif "embeddings" in dat and dat["embeddings"]:
+                                        emb = dat["embeddings"][0]
+                                    else:
+                                        emb = None
+
+                                    if emb is not None:
+                                        results[indices[j]] = emb
+                                        self.embedding_cache.set(txt, emb)
+                        except Exception as e:
+                            logger.error(f"Error fetching embedding for batch item: {e}")
+            except Exception as e:
+                logger.error(f"Error in embeddings batch request: {e}")
+
+        # Execute batches either concurrently or sequentially
+        if async_batch:
+            await asyncio.gather(*[_req_batch(b) for b in batches])
+        else:
+            for b in batches:
+                await _req_batch(b)
+
+        return results
+
+    async def get_embedding(self, text: str, chunk_size: Optional[int] = None, overlap: Optional[int] = None, batch_size: Optional[int] = None, async_batch: Optional[bool] = None) -> Optional[List[float]]:
+        """Get (or compute) embedding for a text. Supports chunking long texts and batching.
+
+        Parameters:
+        - chunk_size, overlap: if text is longer than chunk_size, it will be split and chunk embeddings averaged
+        - batch_size, async_batch: forwarded to batch embedding function
+        """
         if not text or not text.strip():
             return None
 
-        text = text[:2000]
-        text = text.replace(":", " - ")
+        chunk_size = chunk_size or self.valves.EMBEDDING_CHUNK_SIZE
+        overlap = overlap or self.valves.EMBEDDING_CHUNK_OVERLAP
 
-        # Check cache first
-        cached_embedding = self.embedding_cache.get(text)
-        if cached_embedding is not None:
-            return cached_embedding
+        # Normalize text (avoid huge keys in cache)
+        norm_text = text.replace(":", " - ")
 
-        # If not in cache, get from API
-        try:
-            connector = aiohttp.TCPConnector(force_close=True)
-            async with aiohttp.ClientSession(connector=connector) as session:
-                payload = {
-                    "model": self.valves.EMBEDDING_MODEL,
-                    "input": text,
-                }
+        # If text is short enough, do single call (with cache check)
+        if len(norm_text) <= chunk_size:
+            cached = self.embedding_cache.get(norm_text)
+            if cached is not None:
+                return cached
 
-                async with session.post(
-                    f"{self.valves.OLLAMA_URL}/api/embed", json=payload, timeout=30
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        # Handle both old and new API response formats
-                        if "embedding" in result:
-                            embedding = result.get("embedding", [])
-                            if embedding:
-                                # Cache the result
-                                self.embedding_cache.set(text, embedding)
-                                return embedding
-                        elif "embeddings" in result and result["embeddings"]:
-                            # New format with batch response (we only sent one text, so take first)
-                            embedding = result["embeddings"][0]
-                            if embedding:
-                                # Cache the result
-                                self.embedding_cache.set(text, embedding)
-                                return embedding
-                    else:
-                        logger.warning(
-                            f"Embedding request failed with status {response.status}"
-                        )
-
+            embs = await self._get_embeddings_batch([norm_text], batch_size=batch_size, async_batch=async_batch)
+            if embs and embs[0]:
+                self.embedding_cache.set(norm_text, embs[0])
+                return embs[0]
             return None
-        except Exception as e:
-            logger.error(f"Error getting embedding: {e}")
+
+        # Otherwise, split into chunks and aggregate
+        chunks = self._split_text_chunks(norm_text, chunk_size, overlap)
+        # Use batching for the chunk list
+        chunk_embs = await self._get_embeddings_batch(chunks, batch_size=batch_size, async_batch=async_batch)
+        # Filter out any None embeddings
+        valid_embs = [e for e in chunk_embs if e]
+        if not valid_embs:
             return None
+
+        # Aggregate by element-wise mean
+        arr = np.array(valid_embs, dtype=float)
+        mean_emb = arr.mean(axis=0).tolist()
+        # Cache using original normalized text key
+        self.embedding_cache.set(norm_text, mean_emb)
+        return mean_emb
 
     async def get_transformed_embedding(
         self, text: str, transformation=None
@@ -880,20 +1050,19 @@ class Pipe:
         # Log the start of embedding process
         logger.info(f"Preloading embeddings for {len(vocab)} vocabulary words")
 
-        # Process words sequentially
-        for i, word in enumerate(vocab):
-            if i % 100 == 0:  # Log progress every 100 words
-                logger.info(f"Processing vocabulary word {i}/{len(vocab)}")
+        # Generate embeddings in batches using the new batching helper
+        logger.info("Generating embeddings in batches (this may take a while)")
+        embeddings = await self._get_embeddings_batch(vocab)
 
-            # Get embedding for this word
-            embedding = await self.get_embedding(word)
-            if embedding:
-                self.vocabulary_embeddings[word] = embedding
+        for i, emb in enumerate(embeddings):
+            if i % 100 == 0:
+                logger.info(f"Processed vocabulary word {i}/{len(vocab)}")
+            if emb:
+                self.vocabulary_embeddings[vocab[i]] = emb
 
         logger.info(
             f"Generated embeddings for {len(self.vocabulary_embeddings)} vocabulary words"
         )
-
         # Store in state for persistence across calls
         self.update_state("vocabulary_embeddings", self.vocabulary_embeddings)
 
@@ -5501,8 +5670,13 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
         messages: List[Dict],
         stream: bool = False,
         temperature: Optional[float] = None,
+        stream_handler: Optional[Callable[[str], Awaitable[None]]] = None,
     ):
-        """Generate a completion from the specified model"""
+        """Generate a completion from the specified model.
+
+        If `stream` is True and `stream_handler` is provided, call it with partial text as it arrives (OpenAI-compatible API only).
+        Returns the full response structure (non-streaming) or assembled content when streaming if stream_handler is None.
+        """
         try:
             # Use provided temperature or default from valves
             if temperature is None:
@@ -5516,6 +5690,103 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
                 "keep_alive": "10m",
             }
 
+            # If user configured an OpenAI-compatible API base URL, use it directly
+            if self.valves.OPENAI_API_URL:
+                try:
+                    connector = aiohttp.TCPConnector(force_close=True)
+                    async with aiohttp.ClientSession(connector=connector) as session:
+                        base = self.valves.OPENAI_API_URL.rstrip('/')
+                        if not base.endswith('/v1'):
+                            base = base + '/v1'
+                        headers = {'Content-Type': 'application/json'}
+                        if self.valves.OPENAI_API_KEY:
+                            headers['Authorization'] = f"Bearer {self.valves.OPENAI_API_KEY}"
+
+                        body = {
+                            "model": model,
+                            "messages": messages,
+                            "temperature": temperature,
+                            "stream": stream,
+                        }
+
+                        async with session.post(
+                            f"{base}/chat/completions", json=body, headers=headers, timeout=120
+                        ) as resp:
+                            if resp.status != 200:
+                                text = await resp.text()
+                                logger.error(f"OpenAI-compatible API returned {resp.status}: {text}")
+                                return {"choices": [{"message": {"content": f"Error: API {resp.status}"}}]}
+
+                            # If streaming is requested, parse SSE-like chunks
+                            if stream:
+                                assembled = ""
+                                # aiohttp provides an async iterator over the response content
+                                async for raw_chunk in resp.content.iter_chunked(1024):
+                                    try:
+                                        chunk = raw_chunk.decode("utf-8")
+                                    except Exception:
+                                        continue
+                                    if not chunk:
+                                        continue
+                                    # SSE messages are usually prefixed with 'data: '
+                                    for line in chunk.splitlines():
+                                        line = line.strip()
+                                        if not line:
+                                            continue
+                                        if line.startswith("data:"):
+                                            payload = line[len("data:"):].strip()
+                                            if payload == "[DONE]":
+                                                # End of stream
+                                                if stream_handler:
+                                                    await stream_handler(None)  # signal done
+                                                break
+                                            try:
+                                                data = json.loads(payload)
+                                            except Exception:
+                                                continue
+                                            # Extract delta content
+                                            try:
+                                                choices = data.get("choices", [])
+                                                for choice in choices:
+                                                    delta = choice.get("delta", {})
+                                                    content = delta.get("content") or ""
+                                                    if content:
+                                                        assembled += content
+                                                        if stream_handler:
+                                                            await stream_handler(content)
+                                            except Exception:
+                                                continue
+                                        else:
+                                            # Some providers may send raw JSON per line
+                                            try:
+                                                data = json.loads(line)
+                                                choices = data.get("choices", [])
+                                                for choice in choices:
+                                                    # For final objects
+                                                    message = choice.get("message") or {}
+                                                    content = message.get("content") or ""
+                                                    if content:
+                                                        assembled += content
+                                                        if stream_handler:
+                                                            await stream_handler(content)
+                                            except Exception:
+                                                # ignore unparsable lines
+                                                continue
+                                # Return assembled content in a choices-like structure
+                                return {"choices": [{"message": {"content": assembled}}]}
+
+                            # Non-streaming path
+                            data = await resp.json()
+                            return data
+                except Exception as e:
+                    logger.error(f"Error calling OpenAI-compatible API: {e}")
+                    return {"choices": [{"message": {"content": f"Error: {str(e)}"}}]}
+
+            # If streaming was requested but no OpenAI-compatible API is configured, warn and fall back
+            if stream:
+                logger.warning("Streaming requested but no OPENAI_API_URL configured. Falling back to non-streaming helper.")
+
+            # Fallback to the existing open_webui helper if no OpenAI-compatible API is configured
             response = await generate_chat_completions(
                 self.__request__,
                 form_data,
