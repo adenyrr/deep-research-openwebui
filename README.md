@@ -1,5 +1,7 @@
 ### Deep Research At Home! 
 
+**Version:** 0.1.0
+
 This script performs advanced AI research and returns a comprehensive research report that cites its sources and verifies those citations. 
 
 After the user enters a query, the script generates a handful of starter searches, then drafts a research outline for user review. User feedback is not only used to revise the outline, but the user preferences expressed through this feedback are used to shape the continued direction of research. After performing follow-up searches to revise the outline, iterative research begins, tracking the research outline from cycle to cycle, monitoring the completion of topics, and semantically determining which topics to pursue next. Repeat search results are managed variously with sliding content windows, progressive truncation, and relevance penalties, balancing an aim to limit repetition with milking the particularly-relevant repeats. After the research list is sufficiently addressed, or the max cycle limit is hit, long results are semantically compressed and a final outline is generated to refocus on the original query. The report is then generated per-subsection, combined into sections, edited per-section, combined into a final report, and globally edited. After an abstract/introduction/conclusion are generated, the final report is returned. Research results are saved as a text file to your home directory as well. Note that this all means it takes a while - this isn't a 2-minute Grok or 5-minute ChatGPT research process, it's a 30-60 minute process depending on length, and that's the biggest downside. You can't have good, cheap, *and* fast, though :)
@@ -168,9 +170,11 @@ p.valves.EMBEDDING_MODEL = "text-embedding-3-large"
 - Contrôler le batching / async des embeddings :
 
 ```python
-p.valves.EMBEDDING_BATCH_SIZE = 16        # 1 = pas de batching
+p.valves.EMBEDDING_BATCH_SIZE = 1       # 1 = pas de batching
 p.valves.EMBEDDING_BATCH_ASYNC = True     # exécute les batches concurrents
 p.valves.EMBEDDING_BATCH_TIMEOUT = 30     # timeout par batch (s)
+# Délai minimum (secondes) entre requêtes non-batch (single-item) — utile si votre fournisseur impose un rate-limit strict
+p.valves.EMBEDDING_NONBATCH_RATE_LIMIT = 1.0
 ```
 
 - Configurer le chunking des textes longs pour embeddings :
@@ -203,10 +207,38 @@ Cette configuration vous permet d'utiliser OpenRouter/Mistral pour les embedding
 
 ```python
 # n'affiche que la synthèse finale et les erreurs, masque les statuts et messages intermédiaires
+# Les messages intermédiaires sont toujours envoyés mais marqués `masked=True` et encapsulés
+# dans des balises `<think>...</think>` pour que l'interface puisse les afficher sur demande.
 p.valves.STREAM_FINAL_ONLY = True
 ```
 
-- Utilisation d'Ollama : Ollama est facultatif. Si vous fournissez `OPENAI_API_URL` (et facultativement `OPENAI_API_KEY`), l'API OpenAI-compatible sera utilisée pour les embeddings et la tokenisation. Si `OPENAI_API_URL` est vide, le code tentera d'utiliser `OLLAMA_URL` si configuré; sinon les fonctionnalités réseau comme les embeddings ne sont pas disponibles.
+- Détails d'affichage :
+  - Les événements ont maintenant un champ `masked: True` et le contenu est enveloppé via `<think>...</think>` lorsque `STREAM_FINAL_ONLY=True`.
+  - Les erreurs (`level == "error"`) ne sont jamais masquées.
+
+- Utilisation d'Ollama : Ollama est facultatif. Si vous fournissez `OPENAI_API_URL` (et facultativement `OPENAI_API_KEY`), l'API OpenAI-compatible sera utilisée par défaut.
+
+- Configuration avancée par service : vous pouvez maintenant spécifier des endpoints distincts pour les embeddings et la synthèse :
+
+```python
+p.valves.EMBEDDING_API_URL = "https://api.openrouter.ai/v1"
+p.valves.EMBEDDING_API_KEY = "sk_..."  # facultatif
+p.valves.SYNTHESIS_API_URL = "https://api.openrouter.ai/v1"
+p.valves.SYNTHESIS_API_KEY = "sk_..."  # facultatif
+```
+
+Si une option spécifique n'est pas fournie, le `OPENAI_API_URL` / `OPENAI_API_KEY` servira de fallback.
+
+- OCR Mistral pour PDF : vous pouvez activer l'OCR Mistral pour les PDFs scannés (modèle `mistral-ocr-latest` par défaut) :
+
+```python
+p.valves.MISTRAL_OCR_ENABLED = True
+p.valves.MISTRAL_API_URL = "https://mistral.ai/api/v1"
+p.valves.MISTRAL_API_KEY = "sk_mistral..."  # facultatif
+p.valves.MISTRAL_OCR_MODEL = "mistral-ocr-latest"
+```
+
+La fonction testera d'abord les extractions textuelles locales (PyPDF2/pdfplumber). Si ces méthodes échouent et que `MISTRAL_OCR_ENABLED=True`, le PDF sera envoyé au endpoint Mistral pour OCR. Notez que les détails d'API peuvent varier selon les fournisseurs; le client essaie plusieurs patterns d'endpoint courants.
 
 
 ---

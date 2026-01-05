@@ -19,6 +19,7 @@ from open_webui.main import generate_chat_completions
 from open_webui.models.users import User
 
 name = "Deep Research at Home"
+__version__ = "0.2.0"
 
 
 def setup_logger():
@@ -33,6 +34,11 @@ def setup_logger():
         handler.setFormatter(formatter)
         logger.addHandler(handler)
         logger.propagate = False
+        # Log version at startup
+        try:
+            logger.info(f"{name} version {__version__}")
+        except Exception:
+            pass
     return logger
 
 
@@ -299,6 +305,34 @@ class Pipe:
             default="", description="Bearer token / API key for the OpenAI-compatible API (optional)"
         )
 
+        # Per-service API endpoints (allow using different providers for embeddings vs generation)
+        EMBEDDING_API_URL: str = Field(
+            default="", description="Base URL for an OpenAI-compatible embeddings API (overrides OPENAI_API_URL for embeddings if set)"
+        )
+        EMBEDDING_API_KEY: str = Field(
+            default="", description="API key for the EMBEDDING_API_URL (optional)"
+        )
+        SYNTHESIS_API_URL: str = Field(
+            default="", description="Base URL for an OpenAI-compatible generation API (overrides OPENAI_API_URL for completions if set)"
+        )
+        SYNTHESIS_API_KEY: str = Field(
+            default="", description="API key for the SYNTHESIS_API_URL (optional)"
+        )
+
+        # Mistral OCR options for PDFs
+        MISTRAL_API_URL: str = Field(
+            default="https://mistral.ai/api/v1", description="Base URL for Mistral APIs (used for OCR if enabled)"
+        )
+        MISTRAL_API_KEY: str = Field(
+            default="", description="API key / bearer token for Mistral APIs (optional)"
+        )
+        MISTRAL_OCR_MODEL: str = Field(
+            default="mistral-ocr-latest", description="Model name to use for Mistral OCR"
+        )
+        MISTRAL_OCR_ENABLED: bool = Field(
+            default=False, description="Enable using Mistral OCR for scanned PDFs"
+        )
+
         # Embedding batching / chunking options
         EMBEDDING_BATCH_SIZE: int = Field(
             default=1,
@@ -315,6 +349,12 @@ class Pipe:
             description="Timeout (seconds) per embeddings batch request",
             ge=5,
             le=120,
+        )
+        EMBEDDING_NONBATCH_RATE_LIMIT: float = Field(
+            default=1.0,
+            description="Minimum seconds between non-batched (single-item) embedding requests",
+            ge=0.0,
+            le=10.0,
         )
         EMBEDDING_CHUNK_SIZE: int = Field(
             default=1000,
@@ -476,6 +516,10 @@ class Pipe:
         self.executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=self.valves.THREAD_WORKERS
         )
+
+        # Rate limiting for non-batched embedding requests
+        self._last_embedding_request_timestamp = 0.0
+        self._embedding_rate_lock = asyncio.Lock()
 
     async def initialize_research_state(
         self,
@@ -749,17 +793,37 @@ class Pipe:
         async def _req_batch(batch: List[Tuple[int, str]]):
             indices, batch_texts = zip(*batch)
             payload = {"model": self.valves.EMBEDDING_MODEL, "input": list(batch_texts)}
+
+            # Rate limit non-batched (single-item) requests if configured
+            is_single = len(batch_texts) == 1
+            if is_single and getattr(self.valves, "EMBEDDING_NONBATCH_RATE_LIMIT", 0):
+                try:
+                    async with self._embedding_rate_lock:
+                        now = time.time()
+                        elapsed = now - self._last_embedding_request_timestamp
+                        wait = max(0.0, self.valves.EMBEDDING_NONBATCH_RATE_LIMIT - elapsed)
+                        if wait > 0:
+                            logger.debug(f"Rate limiting non-batched embedding request: sleeping {wait:.2f}s")
+                            await asyncio.sleep(wait)
+                        # Update timestamp to now to reserve the slot
+                        self._last_embedding_request_timestamp = time.time()
+                except Exception:
+                    # In case the lock cannot be acquired or time fails, proceed without strict rate limiting
+                    logger.debug("Failed to enforce embedding rate limit; proceeding")
+
             try:
                 connector = aiohttp.TCPConnector(force_close=True)
                 async with aiohttp.ClientSession(connector=connector) as session:
-                    # OpenAI-compatible batch endpoint
-                    if self.valves.OPENAI_API_URL:
-                        base = self.valves.OPENAI_API_URL.rstrip('/')
+                    # OpenAI-compatible batch endpoint (allow different endpoint for embeddings)
+                    embedding_base = (self.valves.EMBEDDING_API_URL or self.valves.OPENAI_API_URL).rstrip('/') if (self.valves.EMBEDDING_API_URL or self.valves.OPENAI_API_URL) else ''
+                    embedding_key = self.valves.EMBEDDING_API_KEY or self.valves.OPENAI_API_KEY
+                    if embedding_base:
+                        base = embedding_base
                         if not base.endswith('/v1'):
                             base = base + '/v1'
                         headers = {'Content-Type': 'application/json'}
-                        if self.valves.OPENAI_API_KEY:
-                            headers['Authorization'] = f"Bearer {self.valves.OPENAI_API_KEY}"
+                        if embedding_key:
+                            headers['Authorization'] = f"Bearer {embedding_key}"
 
                         async with session.post(f"{base}/embeddings", json=payload, timeout=timeout, headers=headers) as resp:
                             if resp.status == 200:
@@ -779,6 +843,17 @@ class Pipe:
                     if self.valves.OLLAMA_URL:
                         for j, txt in enumerate(batch_texts):
                             try:
+                                # For per-item Ollama calls, also respect rate limiting for single-item cases
+                                if is_single and getattr(self.valves, "EMBEDDING_NONBATCH_RATE_LIMIT", 0):
+                                    async with self._embedding_rate_lock:
+                                        now = time.time()
+                                        elapsed = now - self._last_embedding_request_timestamp
+                                        wait = max(0.0, self.valves.EMBEDDING_NONBATCH_RATE_LIMIT - elapsed)
+                                        if wait > 0:
+                                            logger.debug(f"Rate limiting per-item Ollama embedding: sleeping {wait:.2f}s")
+                                            await asyncio.sleep(wait)
+                                        self._last_embedding_request_timestamp = time.time()
+
                                 payload_single = {"model": self.valves.EMBEDDING_MODEL, "input": txt}
                                 async with session.post(f"{self.valves.OLLAMA_URL}/api/embed", json=payload_single, timeout=timeout) as resp2:
                                     if resp2.status == 200:
@@ -3073,16 +3148,33 @@ class Pipe:
             return None
 
     async def translate_dimensions_to_words(self, dimensions, coverage):
-        """Translate research dimensions to human-readable concepts using vocabulary embeddings with caching"""
-        if not dimensions or not coverage:
-            return []
+        """Translate research dimensions to human-readable concepts using vocabulary embeddings with caching
+
+        Robustness improvements:
+        - Validate input types and provide consistent dict-shaped fallback labels
+        - Skip vocabulary words whose embedding dimensionality doesn't match the eigenvector length
+        - Avoid raising exceptions when `dimensions` is malformed (e.g., accidentally a string)
+        """
+        # Basic validation: ensure `dimensions` is a dict-like and `coverage` is list-like
+        if not isinstance(dimensions, dict) or not isinstance(coverage, (list, tuple, np.ndarray)):
+            # Build consistent default dict labels based on coverage length if possible
+            length = len(coverage) if isinstance(coverage, (list, tuple, np.ndarray)) else 3
+            default_labels = [
+                {"dimension": i + 1, "words": f"Dimension {i+1}", "coverage": (coverage[i] if i < len(coverage) else 0)}
+                for i in range(length)
+            ]
+            return default_labels
 
         # Get state for caching
         state = self.get_state()
         dimensions_cache = state.get("dimensions_translation_cache", {})
 
-        # Create a unique cache key based on dimensions and coverage
-        dim_hash = hash(str(dimensions.get("eigenvectors", [])[:3]))
+        # Create a unique cache key based on dimensions and coverage (safe access)
+        try:
+            eigen_preview = dimensions.get("eigenvectors", [])[:3]
+        except Exception:
+            eigen_preview = []
+        dim_hash = hash(str(eigen_preview))
         coverage_hash = hash(str(coverage))
         cache_key = f"dim_{dim_hash}_{coverage_hash}"
 
@@ -3098,8 +3190,12 @@ class Pipe:
             # If not loaded yet, load them now
             self.vocabulary_embeddings = await self.load_vocabulary_embeddings()
 
+        # If still no vocabulary embeddings, return consistent default dict labels
         if not self.vocabulary_embeddings:
-            default_labels = [f"Dimension {i+1}" for i in range(len(coverage))]
+            default_labels = [
+                {"dimension": i + 1, "words": f"Dimension {i+1}", "coverage": (coverage[i] if i < len(coverage) else 0)}
+                for i in range(len(coverage))
+            ]
             dimensions_cache[cache_key] = default_labels
             self.update_state("dimensions_translation_cache", dimensions_cache)
             return default_labels
@@ -3108,26 +3204,44 @@ class Pipe:
         eigenvectors = np.array(dimensions.get("eigenvectors", []))
 
         if len(eigenvectors) == 0 or len(eigenvectors) != len(coverage):
-            default_labels = [f"Dimension {i+1}" for i in range(len(coverage))]
+            default_labels = [
+                {"dimension": i + 1, "words": f"Dimension {i+1}", "coverage": (coverage[i] if i < len(coverage) else 0)}
+                for i in range(len(coverage))
+            ]
             dimensions_cache[cache_key] = default_labels
             self.update_state("dimensions_translation_cache", dimensions_cache)
             return default_labels
 
         try:
+            # Feature dimensionality expected from eigenvectors
+            feature_dim = eigenvectors.shape[1]
+
             # Process each dimension
             for i, eigen_vector in enumerate(eigenvectors):
                 # Find vocabulary words that align with this dimension
                 word_alignments = []
                 for word, embedding in self.vocabulary_embeddings.items():
-                    # Calculate alignment (dot product) with dimension vector
-                    alignment = np.dot(eigen_vector, embedding)
-                    word_alignments.append((word, alignment))
+                    try:
+                        emb_arr = np.array(embedding)
+                        # Only compare when embedding dimensionality matches the eigenvector
+                        if emb_arr.shape[0] != feature_dim:
+                            # Skip mismatched embeddings; log debug occasionally
+                            continue
 
-                # Get top positive aligned words
-                top_words = sorted(word_alignments, key=lambda x: x[1], reverse=True)[
-                    :3
-                ]
-                top_words_str = ", ".join([word for word, _ in top_words])
+                        # Calculate alignment (dot product) with dimension vector
+                        alignment = float(np.dot(eigen_vector, emb_arr))
+                        word_alignments.append((word, alignment))
+                    except Exception:
+                        # Skip any problematic embedding
+                        continue
+
+                # If no valid alignments due to mismatched dims, fall back to an empty words string
+                if not word_alignments:
+                    top_words_str = ""
+                else:
+                    # Get top positive aligned words
+                    top_words = sorted(word_alignments, key=lambda x: x[1], reverse=True)[:3]
+                    top_words_str = ", ".join([word for word, _ in top_words])
 
                 # Create label
                 cov_percentage = coverage[i]
@@ -3146,7 +3260,10 @@ class Pipe:
             return dimension_labels
         except Exception as e:
             logger.error(f"Error translating dimensions to words: {e}")
-            default_labels = [f"Dimension {i+1}" for i in range(len(coverage))]
+            default_labels = [
+                {"dimension": i + 1, "words": f"Dimension {i+1}", "coverage": (coverage[i] if i < len(coverage) else 0)}
+                for i in range(len(coverage))
+            ]
             dimensions_cache[cache_key] = default_labels
             self.update_state("dimensions_translation_cache", dimensions_cache)
             return default_labels
@@ -4350,15 +4467,27 @@ class Pipe:
             except (ImportError, Exception) as e:
                 logger.warning(f"pdfplumber extraction failed: {e}")
 
-            # If both methods failed but we can tell it's a PDF, provide a more useful message
+            # If both methods failed but we can tell it's a PDF, try OCR if enabled
             if pdf_content.startswith(b"%PDF"):
                 logger.warning(
                     "PDF detected but text extraction failed. May be scanned or encrypted."
                 )
+
+                # If Mistral OCR is enabled, attempt OCR
+                if self.valves.MISTRAL_OCR_ENABLED and self.valves.MISTRAL_API_URL:
+                    try:
+                        ocr_text = await self.call_mistral_ocr(pdf_content)
+                        if ocr_text:
+                            logger.info("Successfully extracted text from PDF using Mistral OCR")
+                            return ocr_text
+                        else:
+                            logger.warning("Mistral OCR returned no text")
+                    except Exception as e:
+                        logger.error(f"Mistral OCR failed: {e}")
+
                 return "This appears to be a PDF document, but text extraction failed. The PDF may contain scanned images rather than text, or it may be encrypted/protected."
 
             return "Could not extract text from PDF. The file may not be a valid PDF or may contain security restrictions."
-
         except Exception as e:
             logger.error(f"PDF text extraction failed: {e}")
             return f"Error extracting text from PDF: {str(e)}"
@@ -4377,6 +4506,67 @@ class Pipe:
 
         logger.info(f"Sanitized query: '{query}' -> '{sanitized}'")
         return sanitized
+
+    async def call_mistral_ocr(self, pdf_bytes: bytes) -> Optional[str]:
+        """Call Mistral OCR model to extract text from PDF bytes.
+
+        Attempts several common endpoint patterns for Mistral API and returns the extracted text when available.
+        """
+        try:
+            connector = aiohttp.TCPConnector(force_close=True)
+            async with aiohttp.ClientSession(connector=connector) as session:
+                base = self.valves.MISTRAL_API_URL.rstrip('/')
+                headers = {}
+                if self.valves.MISTRAL_API_KEY:
+                    headers['Authorization'] = f"Bearer {self.valves.MISTRAL_API_KEY}"
+
+                # Try a few possible endpoints / payload formats
+                endpoints = [
+                    f"{base}/models/{self.valves.MISTRAL_OCR_MODEL}/invocations",
+                    f"{base}/models/{self.valves.MISTRAL_OCR_MODEL}/predict",
+                    f"{base}/predict",
+                    f"{base}/invocations",
+                ]
+
+                for ep in endpoints:
+                    try:
+                        # Send as multipart form-data with the file field
+                        data = aiohttp.FormData()
+                        data.add_field('file', pdf_bytes, filename='document.pdf', content_type='application/pdf')
+
+                        async with session.post(ep, data=data, headers=headers, timeout=60) as resp:
+                            if resp.status in (200, 201):
+                                try:
+                                    j = await resp.json()
+                                except Exception:
+                                    text = await resp.text()
+                                    # If a plain text response, return it
+                                    if text and len(text) > 20:
+                                        return text
+                                    continue
+
+                                # Common response patterns: {'text': '...'} or {'outputs': [{'text': '...'}]}
+                                if 'text' in j and isinstance(j['text'], str):
+                                    return j['text']
+                                if 'outputs' in j and isinstance(j['outputs'], list):
+                                    # Find first output with text
+                                    for out in j['outputs']:
+                                        if isinstance(out, dict) and 'text' in out:
+                                            return out['text']
+                                # Some implementations put the data under 'result' or 'data'
+                                if 'result' in j and isinstance(j['result'], str):
+                                    return j['result']
+                                if 'data' in j and isinstance(j['data'], str):
+                                    return j['data']
+
+                    except Exception as e:
+                        logger.debug(f"Mistral OCR endpoint {ep} failed: {e}")
+                        continue
+
+        except Exception as e:
+            logger.error(f"Error calling Mistral OCR: {e}")
+
+        return None
 
     async def identify_and_correlate_citations(
         self, section_title, content, master_source_table
@@ -5700,17 +5890,19 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
                 "keep_alive": "10m",
             }
 
-            # If user configured an OpenAI-compatible API base URL, use it directly
-            if self.valves.OPENAI_API_URL:
+            # If user configured a synthesis API base URL, use it (fallback to OPENAI_API_URL)
+            synthesis_base = (self.valves.SYNTHESIS_API_URL or self.valves.OPENAI_API_URL).rstrip('/') if (self.valves.SYNTHESIS_API_URL or self.valves.OPENAI_API_URL) else ''
+            synthesis_key = self.valves.SYNTHESIS_API_KEY or self.valves.OPENAI_API_KEY
+            if synthesis_base:
                 try:
                     connector = aiohttp.TCPConnector(force_close=True)
                     async with aiohttp.ClientSession(connector=connector) as session:
-                        base = self.valves.OPENAI_API_URL.rstrip('/')
+                        base = synthesis_base
                         if not base.endswith('/v1'):
                             base = base + '/v1'
                         headers = {'Content-Type': 'application/json'}
-                        if self.valves.OPENAI_API_KEY:
-                            headers['Authorization'] = f"Bearer {self.valves.OPENAI_API_KEY}"
+                        if synthesis_key:
+                            headers['Authorization'] = f"Bearer {synthesis_key}"
 
                         body = {
                             "model": model,
@@ -5810,11 +6002,26 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
             return {"choices": [{"message": {"content": f"Error: {str(e)}"}}]}
 
     async def emit_message(self, message: str):
-        """Emit a message to the client"""
+        """Emit a message to the client
+
+        If `STREAM_FINAL_ONLY` is enabled, intermediate messages are sent with a masked flag
+        and wrapped in `<think></think>` so the UI can hide or reveal them on demand.
+        """
         try:
-            # If configured to stream final only, suppress intermediate messages until research is completed
             state = self.get_state()
+
+            # If configured to stream final only and research is not completed, send a masked message
             if self.valves.STREAM_FINAL_ONLY and not state.get("research_completed", False):
+                masked_content = f"<think>{message}</think>"
+                await self.__current_event_emitter__(
+                    {
+                        "type": "message",
+                        "data": {
+                            "content": masked_content,
+                            "masked": True,
+                        },
+                    }
+                )
                 return
 
             await self.__current_event_emitter__(
@@ -5825,14 +6032,32 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
             # Can't do much if this fails, but we don't want to crash
 
     async def emit_status(self, level: str, message: str, done: bool = False):
-        """Emit a status message to the client"""
+        """Emit a status message to the client
+
+        When `STREAM_FINAL_ONLY` is enabled, intermediate statuses (non-error, not done)
+        are sent as masked statuses with `<think>` wrappers and `masked=True` so the UI
+        can toggle visibility.
+        """
         try:
             # Check if research is completed
             state = self.get_state()
             research_completed = state.get("research_completed", False)
 
-            # If configured to stream final only, suppress intermediate non-error statuses
+            # If configured to stream final only, send masked intermediate statuses (unless error)
             if self.valves.STREAM_FINAL_ONLY and not done and level != "error":
+                masked_desc = f"<think>{message}</think>"
+                await self.__current_event_emitter__(
+                    {
+                        "type": "status",
+                        "data": {
+                            "status": "in_progress",
+                            "level": level,
+                            "description": masked_desc,
+                            "done": done,
+                            "masked": True,
+                        },
+                    }
+                )
                 return
 
             if research_completed and not done:
@@ -7491,17 +7716,26 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
         research_dimensions = state.get("research_dimensions")
         if research_dimensions:
             try:
-                dimension_coverage = research_dimensions.get("coverage", [])
+                # Guard against malformed research_dimensions (e.g., accidentally a string)
+                if not isinstance(research_dimensions, dict):
+                    logger.warning("Malformed research_dimensions in state; expected dict, skipping dimension context")
+                else:
+                    dimension_coverage = research_dimensions.get("coverage", [])
 
-                # Create dimension labels for better context
-                dimension_labels = await self.translate_dimensions_to_words(
-                    research_dimensions, dimension_coverage
-                )
+                    # Create dimension labels for better context
+                    dimension_labels = await self.translate_dimensions_to_words(
+                        research_dimensions, dimension_coverage
+                    )
 
-                if dimension_coverage:
-                    outline_context += "\n### Research Dimensions Coverage:\n"
-                    for dim in dimension_labels[:10]:  # Limit to top 10 dimensions
-                        outline_context += f"- {dim.get('words', 'Dimension ' + str(dim.get('dimension', 0)))}:  {dim.get('coverage', 0)}% covered\n"
+                    if dimension_coverage:
+                        outline_context += "\n### Research Dimensions Coverage:\n"
+                        for dim in dimension_labels[:10]:  # Limit to top 10 dimensions
+                            # `dim` is expected to be a dict (see translate_dimensions_to_words fallbacks)
+                            words = dim.get("words") if isinstance(dim, dict) else str(dim)
+                            dim_idx = dim.get("dimension") if isinstance(dim, dict) else 0
+                            coverage_pct = dim.get("coverage", 0) if isinstance(dim, dict) else 0
+                            words_display = words if words else f"Dimension {dim_idx}"
+                            outline_context += f"- {words_display}:  {coverage_pct}% covered\n"
 
             except Exception as e:
                 logger.error(
