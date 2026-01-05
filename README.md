@@ -18,11 +18,6 @@ I use this script on a local openwebui instance, and I do not guarantee its use 
 
 Feel free to fork it! :)
 
----
-
-**Token Usage Statistics**
-
----
 
 ## 🔧 Configuration des embeddings et streaming (exemples)
 
@@ -108,22 +103,3 @@ p.valves.MISTRAL_OCR_MODEL = "mistral-ocr-latest"
 ```
 
 La fonction testera d'abord les extractions textuelles locales (PyPDF2/pdfplumber). Si ces méthodes échouent et que `MISTRAL_OCR_ENABLED=True`, le PDF sera envoyé au endpoint Mistral pour OCR. Notez que les détails d'API peuvent varier selon les fournisseurs; le client essaie plusieurs patterns d'endpoint courants.
-
-
----
-
-
-
-- Research Results: 123956 tokens
-- Final Synthesis: 5649 tokens
-- Total: 134703 tokens
-
-
----
-
-**Research Data Exported**
-
-Research data has been exported to:
-- Text file: `/home/radeon/research_export_Provide_a_comprehensive_summar_20250429_154950.txt`
-
-This file contain all research results, queries, timestamps, and content for future reference.
