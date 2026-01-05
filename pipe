@@ -4923,9 +4923,13 @@ class Pipe:
         try:
             from open_webui.routers.retrieval import process_web_search, SearchForm
 
-            # Create a search form with the query
-            search_form = SearchForm(query=query)
-
+            # Create a search form with the query (SearchForm expects a 'queries' list)
+            try:
+                search_form = SearchForm(queries=[query])
+            except Exception as e:
+                logger.error(f"Failed to construct SearchForm for query '{query}': {e}")
+                # Re-raise to be captured by outer exception handler and trigger fallback
+                raise
             # Call the search function
             logger.debug(f"Executing built-in search with query: {query}")
 
