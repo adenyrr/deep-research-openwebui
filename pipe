@@ -9791,9 +9791,9 @@ L'abstract NE DOIT PAS :
 3. S'attarder sur des complexités supposées du processus de recherche ou inclure des appels à des recherches futures
 4. Adopter un ton moralisateur ou prendre position sur des éléments non dictés par les données fournies
 5. Surévaluer l'importance de services, fournisseurs, lieux, marques ou autres entités au-delà d'exemples pertinents
-6. Donner l'impression d'être excessivement diplomatique, enthousiaste ou trop général.""",
+6. Donner l'impression d'être excessivement diplomatique, enthousiaste ou trop général.
 
-	The abstract should follow scientific paper abstract structure but be accessible to an educated general audience.""",
+L'abstract doit également suivre la structure attendue d'un abstract scientifique tout en restant accessible à un public général cultivé.""",
         }
 
         # Create a context with the full report and bibliography information
@@ -10396,13 +10396,13 @@ NE DOIT PAS :
 
 Votre plan doit couvrir l'espace conceptuel entre une introduction et une conclusion sans ajouter d'éléments superflus.
 Ne vous laissez pas distraire par des artefacts de rendu, éléments de l'interface web, HTML/CSS ou tout autre texte non pertinent.
-N'ajoutez ni annexe, ni introduction explicite, ni conclusion — répondez uniquement par le plan demandé.""",
-	
-	Format your response as a valid JSON object with the following structure:
-	{{"outline": [
-	  {{"topic": "Main topic 1", "subtopics": ["Subtopic 1.1", "Subtopic 1.2"]}},
-	  {{"topic": "Main topic 2", "subtopics": ["Subtopic 2.1", "Subtopic 2.2"]}}
-	]}}""",
+N'ajoutez ni annexe, ni introduction explicite, ni conclusion — répondez uniquement par le plan demandé.
+
+Format de réponse attendu (objet JSON) :
+{{"outline": [
+  {{"topic": "Sujet principal 1", "subtopics": ["Sous‑sujet 1.1", "Sous‑sujet 1.2"]}},
+  {{"topic": "Sujet principal 2", "subtopics": ["Sous‑sujet 2.1", "Sous‑sujet 2.2"]}}
+]}}""",
                 }
 
                 # Build context from initial search results
@@ -10838,11 +10838,11 @@ Format your response as a valid JSON object with the following structure:
 
                     # Create the current checklist for display to the user
                     current_checklist = {
-                        "completed": newly_completed,
-                        "partial": set(analysis_data.get("partial_topics", [])),
-                        "irrelevant": newly_irrelevant,
-                        "new": set(new_topics),
-                        "remaining": set(active_outline),
+                        "completed": list(newly_completed),
+                        "partial": list(analysis_data.get("partial_topics", [])),
+                        "irrelevant": list(newly_irrelevant),
+                        "new": list(new_topics),
+                        "remaining": list(active_outline),
                     }
 
                     # Display analysis to the user
@@ -11401,12 +11401,11 @@ La conclusion NE DOIT PAS :
 1. Interpréter le contenu de façon grandiloquente ou exagérer son importance.
 2. Présenter le sujet sous un angle particulier (positif ou négatif) ni utiliser un ton apologétique ou méprisant.
 3. S'attarder sur des complexités supposées ou inclure des appels à des recherches futures.
-""",
-                4. Ever take a preachy or moralizing tone, or take a "stance" for or against/"side" with or against anything not driven by the provided data.
-                5. Overstate the significance of specific services, providers, locations, brands, or other entities beyond examples of some type or category.
-                6. Sound to the reader as though it is overtly attempting to be diplomatic, considerate, enthusiastic, or overly-generalized.
-    
-                Please only respond with your conclusion - do not include any segue, commentary, explanation, etc.""",
+4. Adopter un ton moralisateur ou prendre position sur des éléments non dictés par les données fournies.
+5. Surévaluer l'importance de services, fournisseurs, lieux, marques ou autres entités au-delà d'exemples pertinents.
+6. Donner l'impression d'être excessivement diplomatique, enthousiaste ou trop général.
+
+Veuillez ne répondre que par la conclusion demandée — n'incluez ni transition, ni justification, ni explication.""",
         }
 
         concl_context = (
