@@ -4629,10 +4629,11 @@ class Pipe:
 
             # Extract JSON from response
             try:
-                json_str = citation_content[
-                    citation_content.find("{") : citation_content.rfind("}") + 1
-                ]
-                citation_data = json.loads(json_str)
+                parsed = self._extract_json_fragment(citation_content)
+                if isinstance(parsed, dict):
+                    citation_data = parsed
+                else:
+                    citation_data = {}
 
                 section_citations = []
                 for citation in citation_data.get("citations", []):
@@ -6009,6 +6010,41 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
             # Return a minimal valid response structure
             return {"choices": [{"message": {"content": f"Error: {str(e)}"}}]}
 
+    def _extract_json_fragment(self, text: str):
+        """Try to extract a JSON object or array from arbitrary model output text.
+
+        Returns the parsed JSON (dict or list) or raises the original exception if parsing fails.
+        As a fallback, it will extract quoted strings as a list.
+        """
+        import re
+
+        if not text:
+            raise ValueError("No text provided for JSON extraction")
+
+        txt = text.strip()
+        # Find earliest opening brace or bracket and the last corresponding closing
+        starts = [i for i in (txt.find("{"), txt.find("[")) if i != -1]
+        if starts:
+            start = min(starts)
+            ends = [i for i in (txt.rfind("}"), txt.rfind("]")) if i != -1]
+            end = max(ends) if ends else -1
+            if end >= start:
+                candidate = txt[start : end + 1]
+            else:
+                candidate = txt
+        else:
+            candidate = txt
+
+        try:
+            return json.loads(candidate)
+        except Exception:
+            # Fallback: pull quoted substrings as a list
+            arr = re.findall(r'"([^\"]+)"', txt)
+            if arr:
+                return arr
+            # Re-raise a JSON error with some context
+            raise ValueError(f"Failed to parse JSON fragment from text: {txt[:200]}")
+
     async def emit_message(self, message: str):
         """Emit a message to the client
 
@@ -6569,10 +6605,11 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
 
             # Extract JSON from response
             try:
-                json_str = result_content[
-                    result_content.find("{") : result_content.rfind("}") + 1
-                ]
-                result_data = json.loads(json_str)
+                parsed = self._extract_json_fragment(result_content)
+                if isinstance(parsed, dict):
+                    result_data = parsed
+                else:
+                    result_data = {}
 
                 # Get keep and remove lists
                 keep_indices = result_data.get("keep", [])
@@ -9649,21 +9686,27 @@ Format de réponse attendu (objet JSON) :
 
             # Extract JSON from response
             try:
-                query_json_str = query_content[
-                    query_content.find("{") : query_content.rfind("}") + 1
-                ]
-                query_data = json.loads(query_json_str)
-                queries = query_data.get("queries", [])
-
-                # Check if queries is a list of strings or a list of objects
-                if queries and isinstance(queries[0], str):
-                    # Convert to objects with query and topic
-                    query_strings = queries
-                    query_topics = (
-                        priority_topics[: len(queries)]
-                        if priority_topics
-                        else ["Research"] * len(queries)
-                    )
+                parsed = self._extract_json_fragment(query_content)
+                if isinstance(parsed, dict):
+                    queries = parsed.get("queries", [])
+                elif isinstance(parsed, list):
+                    # If it's a list of objects with query keys, keep as-is
+                    if parsed and isinstance(parsed[0], dict):
+                        queries = parsed
+                    else:
+                        # It's a list of strings
+                        query_strings = parsed
+                        query_topics = (
+                            priority_topics[: len(parsed)]
+                            if priority_topics
+                            else ["Research"] * len(parsed)
+                        )
+                        queries = [
+                            {"query": s, "topic": t}
+                            for s, t in zip(query_strings, query_topics)
+                        ]
+                else:
+                    queries = []
                     queries = [
                         {"query": q, "topic": t}
                         for q, t in zip(query_strings, query_topics)
@@ -9742,10 +9785,11 @@ Format de réponse attendu (objet JSON) :
 
                 # Extract JSON from response
                 try:
-                    json_str = titles_content[
-                        titles_content.find("{") : titles_content.rfind("}") + 1
-                    ]
-                    titles_data = json.loads(json_str)
+                    parsed = self._extract_json_fragment(titles_content)
+                    if isinstance(parsed, dict):
+                        titles_data = parsed
+                    else:
+                        titles_data = {}
 
                     main_title = titles_data.get(
                         "main_title", f"Research Report: {user_message}"
@@ -10080,14 +10124,19 @@ Format de réponse attendu (objet JSON) :
                 )
                 query_content = query_response["choices"][0]["message"]["content"]
 
-                # Extract JSON from response
+                # Extract JSON from response using robust helper
                 try:
-                    query_json_str = query_content[
-                        query_content.find("{") : query_content.rfind("}") + 1
-                    ]
-                    query_data = json.loads(query_json_str)
-                    initial_queries = query_data.get("queries", [])
-                except (json.JSONDecodeError, ValueError) as e:
+                    parsed = self._extract_json_fragment(query_content)
+                    if isinstance(parsed, dict):
+                        initial_queries = parsed.get("queries", [])
+                    elif isinstance(parsed, list):
+                        if parsed and isinstance(parsed[0], str):
+                            initial_queries = parsed[:3]
+                        elif parsed and isinstance(parsed[0], dict):
+                            initial_queries = [d.get("query") for d in parsed][:3]
+                        else:
+                            initial_queries = []
+                except Exception as e:
                     logger.error(f"Error parsing query JSON: {e}")
                     # Fallback: extract queries using regex if JSON parsing fails
                     import re
@@ -10212,12 +10261,13 @@ Format de réponse attendu (objet JSON) :
 
                 # Extract JSON from response
                 try:
-                    outline_json_str = outline_content[
-                        outline_content.find("{") : outline_content.rfind("}") + 1
-                    ]
-                    outline_data = json.loads(outline_json_str)
-                    research_outline = outline_data.get("outline", [])
-                except (json.JSONDecodeError, ValueError) as e:
+                    parsed = self._extract_json_fragment(outline_content)
+                    if isinstance(parsed, dict):
+                        outline_data = parsed
+                        research_outline = outline_data.get("outline", [])
+                    else:
+                        research_outline = []
+                except Exception as e:
                     logger.error(f"Error parsing outline JSON: {e}")
                     # Fallback: create a simple outline if JSON parsing fails
                     research_outline = [
@@ -10805,7 +10855,16 @@ Format your response as a valid JSON object with the following structure:
 
                     # Extract JSON from response
                     analysis_json_str = analysis_content[
-                        analysis_content.find("{") : analysis_content.rfind("}") + 1
+                        # Use robust JSON fragment extraction
+                        try:
+                            parsed = self._extract_json_fragment(analysis_content)
+                            if isinstance(parsed, dict):
+                                analysis_data = parsed
+                            else:
+                                analysis_data = {}
+                        except Exception as e:
+                            logger.error(f"Error parsing analysis JSON: {e}")
+                            analysis_data = {}
                     ]
                     analysis_data = json.loads(analysis_json_str)
 
