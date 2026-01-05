@@ -3,7 +3,7 @@ title: Deep Search
 author: open-webui, atgehrhardt, adenyrr
 author_url: https://github.com/adenyrr
 funding_url: https://github.com/open-webui
-version: 0.0.5
+version: 0.5.0
 required_open_webui_version: 0.5.xx
 """
 
@@ -27,7 +27,7 @@ from open_webui.constants import TASKS
 from open_webui.main import generate_chat_completions
 from open_webui.models.users import User
 
-name = "Deep Research at Home"
+name = "Deep Search"
 __version__ = "0.5.0"
 
 
