@@ -390,6 +390,10 @@ class Pipe:
             default=True,
             description="Enable user interaction during research",
         )
+        STREAM_FINAL_ONLY: bool = Field(
+            default=False,
+            description="If True, suppress streaming of intermediate research/status messages and only emit final synthesis and errors",
+        )
         USER_PREFERENCE_THROUGHOUT: bool = Field(
             default=True,
             description="Use user removal preferences throughout research cycles",
@@ -659,27 +663,30 @@ class Pipe:
             words = text.split()
             return int(len(words) * 1.3)
 
-        # Legacy Ollama tokenize endpoint fallback
-        try:
-            connector = aiohttp.TCPConnector(force_close=True)
-            async with aiohttp.ClientSession(connector=connector) as session:
-                payload = {
-                    "model": self.valves.RESEARCH_MODEL,
-                    "prompt": text,
-                }
+        # Legacy Ollama tokenize endpoint fallback (only if configured)
+        if self.valves.OLLAMA_URL:
+            try:
+                connector = aiohttp.TCPConnector(force_close=True)
+                async with aiohttp.ClientSession(connector=connector) as session:
+                    payload = {
+                        "model": self.valves.RESEARCH_MODEL,
+                        "prompt": text,
+                    }
 
-                async with session.post(
-                    f"{self.valves.OLLAMA_URL}/api/tokenize", json=payload, timeout=10
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        tokens = result.get("tokens", [])
-                        if len(text) > 2000:
-                            ratio = len(text) / 2000
-                            return int(len(tokens) * ratio)
-                        return len(tokens)
-        except Exception as e:
-            logger.error(f"Error counting tokens with Ollama API: {e}")
+                    async with session.post(
+                        f"{self.valves.OLLAMA_URL}/api/tokenize", json=payload, timeout=10
+                    ) as response:
+                        if response.status == 200:
+                            result = await response.json()
+                            tokens = result.get("tokens", [])
+                            if len(text) > 2000:
+                                ratio = len(text) / 2000
+                                return int(len(tokens) * ratio)
+                            return len(tokens)
+            except Exception as e:
+                logger.error(f"Error counting tokens with Ollama API: {e}")
+        else:
+            logger.debug("No OLLAMA_URL configured; skipping Ollama tokenize fallback.")
 
         # Final fallback heuristic
         words = text.split()
@@ -768,25 +775,28 @@ class Pipe:
                             text = await resp.text()
                             logger.error(f"Embeddings batch error {resp.status}: {text}")
 
-                    # Fall back to Ollama per-item requests
-                    for j, txt in enumerate(batch_texts):
-                        try:
-                            payload_single = {"model": self.valves.EMBEDDING_MODEL, "input": txt}
-                            async with session.post(f"{self.valves.OLLAMA_URL}/api/embed", json=payload_single, timeout=timeout) as resp2:
-                                if resp2.status == 200:
-                                    dat = await resp2.json()
-                                    if "embedding" in dat:
-                                        emb = dat.get("embedding")
-                                    elif "embeddings" in dat and dat["embeddings"]:
-                                        emb = dat["embeddings"][0]
-                                    else:
-                                        emb = None
+                    # Fall back to Ollama per-item requests (only if OLLAMA_URL configured)
+                    if self.valves.OLLAMA_URL:
+                        for j, txt in enumerate(batch_texts):
+                            try:
+                                payload_single = {"model": self.valves.EMBEDDING_MODEL, "input": txt}
+                                async with session.post(f"{self.valves.OLLAMA_URL}/api/embed", json=payload_single, timeout=timeout) as resp2:
+                                    if resp2.status == 200:
+                                        dat = await resp2.json()
+                                        if "embedding" in dat:
+                                            emb = dat.get("embedding")
+                                        elif "embeddings" in dat and dat["embeddings"]:
+                                            emb = dat["embeddings"][0]
+                                        else:
+                                            emb = None
 
-                                    if emb is not None:
-                                        results[indices[j]] = emb
-                                        self.embedding_cache.set(txt, emb)
-                        except Exception as e:
-                            logger.error(f"Error fetching embedding for batch item: {e}")
+                                        if emb is not None:
+                                            results[indices[j]] = emb
+                                            self.embedding_cache.set(txt, emb)
+                            except Exception as e:
+                                logger.error(f"Error fetching embedding for batch item: {e}")
+                    else:
+                        logger.debug("No OLLAMA_URL configured; skipping Ollama embed fallback.")
             except Exception as e:
                 logger.error(f"Error in embeddings batch request: {e}")
 
@@ -5802,6 +5812,11 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
     async def emit_message(self, message: str):
         """Emit a message to the client"""
         try:
+            # If configured to stream final only, suppress intermediate messages until research is completed
+            state = self.get_state()
+            if self.valves.STREAM_FINAL_ONLY and not state.get("research_completed", False):
+                return
+
             await self.__current_event_emitter__(
                 {"type": "message", "data": {"content": message}}
             )
@@ -5815,6 +5830,10 @@ Reply with JUST "Yes" or "No" - no explanation or other text.""",
             # Check if research is completed
             state = self.get_state()
             research_completed = state.get("research_completed", False)
+
+            # If configured to stream final only, suppress intermediate non-error statuses
+            if self.valves.STREAM_FINAL_ONLY and not done and level != "error":
+                return
 
             if research_completed and not done:
                 status = "complete"

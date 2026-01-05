@@ -199,6 +199,16 @@ await p.generate_completion(
 
 Cette configuration vous permet d'utiliser OpenRouter/Mistral pour les embeddings et la génération, de paralléliser les batches d'embeddings et de gérer le streaming des réponses en temps réel.
 
+- Masquer les recherches pendant l'exécution (stream final seulement) :
+
+```python
+# n'affiche que la synthèse finale et les erreurs, masque les statuts et messages intermédiaires
+p.valves.STREAM_FINAL_ONLY = True
+```
+
+- Utilisation d'Ollama : Ollama est facultatif. Si vous fournissez `OPENAI_API_URL` (et facultativement `OPENAI_API_KEY`), l'API OpenAI-compatible sera utilisée pour les embeddings et la tokenisation. Si `OPENAI_API_URL` est vide, le code tentera d'utiliser `OLLAMA_URL` si configuré; sinon les fonctionnalités réseau comme les embeddings ne sont pas disponibles.
+
+
 ---
 
 
