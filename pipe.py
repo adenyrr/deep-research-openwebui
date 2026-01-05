@@ -4498,6 +4498,13 @@ class Pipe:
 
     async def sanitize_query(self, query: str) -> str:
         """Sanitize search query by removing quotes and handling special characters"""
+        # Be tolerant of non-string inputs (e.g., dicts returned by model)
+        if not isinstance(query, str):
+            if isinstance(query, dict):
+                query = query.get("query") or query.get("text") or str(query)
+            else:
+                query = str(query)
+
         # Remove quotes that might cause problems with search engines
         sanitized = query.replace('"', " ").replace('"', " ").replace('"', " ")
 
@@ -10127,15 +10134,38 @@ Format de réponse attendu (objet JSON) :
                 # Extract JSON from response using robust helper
                 try:
                     parsed = self._extract_json_fragment(query_content)
+
+                    # Normalize any returned structure into a list of strings
+                    initial_queries = []
                     if isinstance(parsed, dict):
-                        initial_queries = parsed.get("queries", [])
+                        q = parsed.get("queries", [])
+                        if isinstance(q, list):
+                            for item in q:
+                                if isinstance(item, str):
+                                    initial_queries.append(item)
+                                elif isinstance(item, dict):
+                                    # Common keys used by models to provide query text
+                                    initial_queries.append(
+                                        item.get("query")
+                                        or item.get("text")
+                                        or next((v for v in item.values() if isinstance(v, str)), None)
+                                    )
+                        elif isinstance(q, str):
+                            initial_queries = [q]
                     elif isinstance(parsed, list):
-                        if parsed and isinstance(parsed[0], str):
-                            initial_queries = parsed[:3]
-                        elif parsed and isinstance(parsed[0], dict):
-                            initial_queries = [d.get("query") for d in parsed][:3]
-                        else:
-                            initial_queries = []
+                        for item in parsed:
+                            if isinstance(item, str):
+                                initial_queries.append(item)
+                            elif isinstance(item, dict):
+                                initial_queries.append(
+                                    item.get("query")
+                                    or item.get("text")
+                                    or next((v for v in item.values() if isinstance(v, str)), None)
+                                )
+
+                    # Ensure we only keep non-empty strings and limit to 3 queries
+                    initial_queries = [s for s in initial_queries if s and isinstance(s, str)][:3]
+
                 except Exception as e:
                     logger.error(f"Error parsing query JSON: {e}")
                     # Fallback: extract queries using regex if JSON parsing fails
