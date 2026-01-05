@@ -13,12 +13,13 @@ import math
 import time
 import asyncio
 import re
+import html
 import random
 import numpy as np
 import aiohttp
 import concurrent.futures
 from datetime import datetime
-from typing import Dict, List, Callable, Awaitable, Optional, Any, Union, Set, Tuple
+from typing import Dict, List, Callable, Awaitable, Optional, Any, Set, Tuple
 from pydantic import BaseModel, Field
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.decomposition import PCA
@@ -904,6 +905,26 @@ class Pipe:
         - chunk_size, overlap: if text is longer than chunk_size, it will be split and chunk embeddings averaged
         - batch_size, async_batch: forwarded to batch embedding function
         """
+        # Be tolerant of non-string inputs (models or pipelines sometimes return dicts/lists)
+        if not isinstance(text, str):
+            if isinstance(text, dict):
+                # Prefer common text keys if present, else join values
+                text = text.get("text") or text.get("content") or text.get("query") or " ".join(
+                    [str(v) for v in text.values()]
+                )
+                # Fallback to str() if still falsy
+                if not text:
+                    text = str(text)
+                logger.debug(
+                    "Coerced dict embedding input to string (length=%d)", len(text)
+                )
+            else:
+                # For lists or other types, convert to string
+                text = str(text)
+                logger.debug(
+                    "Coerced non-str embedding input to string (type=%s, length=%d)", type(text), len(text)
+                )
+
         if not text or not text.strip():
             return None
 
@@ -1385,8 +1406,7 @@ class Pipe:
                 max_cycles = self.valves.MAX_CYCLES
                 fade_start_cycle = min(5, int(0.5 * max_cycles))
 
-                # Get gap coverage history to analyze trend
-                gap_coverage_history = state.get("gap_coverage_history", [])
+                # Gap coverage history is stored in state when needed (not required here)
 
                 # Determine if gaps are still valuable for research direction
                 if current_cycle <= fade_start_cycle:
@@ -2147,7 +2167,6 @@ class Pipe:
 
             if eigendecomposition:
                 # Calculate importance scores based on the eigendecomposition
-                embeddings_array = np.array(chunk_embeddings)
                 importance_scores = []
 
                 # Create basic directions
@@ -2176,7 +2195,6 @@ class Pipe:
 
                 # Project chunks into the principal component space for better analysis
                 projected_chunks = eigendecomposition["projected_embeddings"]
-                eigenvectors = np.array(eigendecomposition["eigenvectors"])
 
                 # Calculate local coherence using the eigenspace
                 local_coherence = []
@@ -2216,10 +2234,10 @@ class Pipe:
                 if query_embedding:
                     try:
                         # Ensure we're getting transformed embeddings if a transformation is available
-                        if semantic_transformations:
+                        if transformation:
                             transformed_query = (
                                 await self.apply_semantic_transformation(
-                                    query_embedding, semantic_transformations
+                                    query_embedding, transformation
                                 )
                             )
                             if transformed_query:
@@ -3193,7 +3211,7 @@ class Pipe:
 
         # Check if we have a cached translation
         if cache_key in dimensions_cache:
-            logger.info(f"Using cached dimension translation")
+            logger.info("Using cached dimension translation")
             return dimensions_cache[cache_key]
 
         dimension_labels = []
@@ -3446,8 +3464,7 @@ class Pipe:
             # Try BeautifulSoup if available
             try:
                 from bs4 import BeautifulSoup
-                import html
-                import re  # Explicitly import re here for the closure
+                # Use module-level `html` and `re` (imported at module scope)
 
                 # Create a task for BS4 extraction
                 def extract_with_bs4():
@@ -3560,8 +3577,7 @@ class Pipe:
 
                 # Otherwise fall back to the regex version
                 # Quick regex extraction first
-                import re
-                import html
+                # Using module-level `re` and `html`
 
                 # First unescape HTML entities properly
                 unescaped_content = html.unescape(html_content)
@@ -3669,7 +3685,8 @@ class Pipe:
                 text = re.sub(r"\s+", " ", text).strip()
 
                 return text
-            except:
+            except Exception as e:
+                logger.warning(f"Fallback HTML extraction failed: {e}")
                 return html_content
 
     async def fetch_content(self, url: str) -> str:
@@ -3810,8 +3827,8 @@ class Pipe:
                     else domain
                 ),
                 domain + " research",
-                domain + " " + query if "query" in locals() else domain,
-                query if "query" in locals() else domain + " publication",
+                domain + " " + locals().get("query", domain),
+                locals().get("query", domain + " publication"),
             ]
 
             # Filter out empty or very short ones
@@ -5541,7 +5558,7 @@ class Pipe:
 
         if not content or len(content) < 200:
             logger.warning(
-                f"Content too short for quality filtering, accepting by default"
+                "Content too short for quality filtering, accepting by default"
             )
             return True
 
@@ -7232,7 +7249,7 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
                             if least_seen.get("url"):
                                 replacement_cycle_seen_urls.add(least_seen.get("url"))
                             logger.info(
-                                f"Using least-seen URL as fallback to ensure research continues"
+                                "Using least-seen URL as fallback to ensure research continues"
                             )
 
                     group_results.append(
@@ -7875,7 +7892,8 @@ Format de sortie attendu : un objet JSON valide avec la structure suivante :
                         synthesis_outline = outline_data.get("outline", [])
                         if synthesis_outline:
                             return synthesis_outline
-                    except:
+                    except Exception as e:
+                        logger.debug(f"Skipping malformed JSON result: {e}")
                         continue
 
                 # If no valid JSON found, try a more aggressive repair approach
@@ -9213,7 +9231,8 @@ Renvoyez vos résultats sous la forme d'un tableau JSON avec le format suivant :
             from open_webui import get_app_dir
 
             export_dir = get_app_dir()
-        except:
+        except Exception as e:
+            logger.warning(f"Could not get OpenWebUI app dir, using cwd instead: {e}")
             export_dir = os.getcwd()  # Fallback to current directory
 
         filepath = os.path.join(export_dir, filename)
@@ -10498,12 +10517,12 @@ Ne vous laissez pas distraire par des artefacts de rendu, éléments de l'interf
 N'ajoutez ni annexe, ni introduction explicite, ni conclusion — répondez uniquement par le plan demandé.
 
 Format de réponse attendu (objet JSON) :
-{
+{{
   "outline": [
-    {"topic": "Sujet principal 1", "subtopics": ["Sous‑sujet 1.1", "Sous‑sujet 1.2"]},
-    {"topic": "Sujet principal 2", "subtopics": ["Sous‑sujet 2.1", "Sous‑sujet 2.2"]}
+    {{"topic": "Sujet principal 1", "subtopics": ["Sous‑sujet 1.1", "Sous‑sujet 1.2"]}},
+    {{"topic": "Sujet principal 2", "subtopics": ["Sous‑sujet 2.1", "Sous‑sujet 2.2"]}}
   ]
-}""",
+}}""",
                 }
 
                 # Build context from initial search results
