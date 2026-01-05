@@ -10265,19 +10265,24 @@ Format de réponse attendu (objet JSON) :
 
                 initial_query_prompt = {
                     "role": "system",
-                    "content": f"""Vous êtes un assistant de recherche (post‑universitaire) générant des requêtes efficaces.
+                    "content": (
+                        f"""Vous êtes un assistant de recherche (post‑universitaire) générant des requêtes efficaces.
 L'utilisateur a soumis la requête de recherche suivante : "{user_message}".
 En vous basant sur cette entrée, générez 8 requêtes initiales pour lancer la recherche et délimiter le sujet.
 La moitié des requêtes doit être large (identifier et définir le thème principal, fournir des informations générales),
 la moitié restante doit être plus spécifique (cibler des informations permettant d'approfondir des aspects connus de la requête).
 Utilisez les guillemets avec parcimonie et seulement si nécessaire. N'utilisez jamais plusieurs paires de guillemets dans une même requête.
 
+"""
+                    ) + """
 Format de réponse attendu (objet JSON) :
-{"queries": [
-  "requête 1",
-  "requête 2",
-  "requête 3..."
-]}
+{
+  "queries": [
+    {"query": "requête 1", "topic": "sujet lié"},
+    {"query": "requête 2", "topic": "sujet lié"},
+    {"query": "requête 3", "topic": "sujet lié"}
+  ]
+}
 """,
                 }
 
@@ -10404,10 +10409,12 @@ Ne vous laissez pas distraire par des artefacts de rendu, éléments de l'interf
 N'ajoutez ni annexe, ni introduction explicite, ni conclusion — répondez uniquement par le plan demandé.
 
 Format de réponse attendu (objet JSON) :
-{{"outline": [
-  {{"topic": "Sujet principal 1", "subtopics": ["Sous‑sujet 1.1", "Sous‑sujet 1.2"]}},
-  {{"topic": "Sujet principal 2", "subtopics": ["Sous‑sujet 2.1", "Sous‑sujet 2.2"]}}
-]}}""",
+{
+  "outline": [
+    {"topic": "Sujet principal 1", "subtopics": ["Sous‑sujet 1.1", "Sous‑sujet 1.2"]},
+    {"topic": "Sujet principal 2", "subtopics": ["Sous‑sujet 2.1", "Sous‑sujet 2.2"]}
+  ]
+}""",
                 }
 
                 # Build context from initial search results
@@ -10733,13 +10740,13 @@ Topics should be classified as:
 Remember that the research ultimately aims to address the original query: "{user_message}".
 
 Format your response as a valid JSON object with the following structure:
-{{
+{
   "completed_topics": ["Topic 1", "Subtopic 2.1"],
   "partial_topics": ["Topic 2"],
   "irrelevant_topics": ["Topic that's a distraction", "Misidentified subject"],
   "new_topics": ["New topic discovered"],
   "analysis": "Brief analysis of what we've learned so far with a focus on results from this past cycle"
-}}""",
+}""",
                 }
 
                 # Create a context with the current outline and search results
