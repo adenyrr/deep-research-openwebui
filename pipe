@@ -9273,20 +9273,19 @@ NE PAS :
 3. Effectuer des révisions inutiles en dehors du périmètre visant à assurer la fluidité du début à la fin
 4. Supprimer ou modifier AUCUNE citation inline ni texte barré — ces éléments sont destinés à une revue humaine et NE DOIVENT PAS être changés
 
-Pour chaque modification proposée, fournissez le texte exact à remplacer et le texte de remplacement exact.""",
-    Don't include any justification or reasoning for your replacements - they will be inserted directly, so please make sure they fit in context.
-    
-    Format your response as a JSON object with the following structure:
+Pour chaque modification proposée, fournissez le texte exact à trouver ("find_text") et le texte exact de remplacement ("replace_text"). N'incluez aucune justification ou raisonnement — les remplacements seront insérés directement, vérifiez donc qu'ils conviennent au contexte.
+
+Formatez votre réponse comme un objet JSON avec la structure suivante :
+{
+  "global_edits": [
     {
-      "global_edits": [
-        {
-          "find_text": "exact text to be replaced", 
-          "replace_text": "exact replacement text"
-        }
-      ]
+      "find_text": "exact text to be replaced",
+      "replace_text": "exact replacement text"
     }
-    
-    The find_text must be the EXACT text string as it appears in the document, and the replace_text must be the EXACT text to replace it with.""",
+  ]
+}
+
+Le champ "find_text" doit correspondre EXACTEMENT à la chaîne à remplacer telle qu'elle apparaît dans le document, et "replace_text" doit être la chaîne EXACTE de remplacement.""",
         }
 
         # Create context with all sections
