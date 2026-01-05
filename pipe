@@ -7648,7 +7648,8 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
         # Create a prompt for generating the synthesis outline
         synthesis_outline_prompt = {
             "role": "system",
-            "content": f"""Vous êtes un universitaire de niveau post‑universitaire chargé de réorganiser un plan de recherche destiné à la rédaction d'un rapport de recherche complet.
+            "content": (
+                f"""Vous êtes un universitaire de niveau post‑universitaire chargé de réorganiser un plan de recherche destiné à la rédaction d'un rapport de recherche complet.
 
 Créez un plan affiné qui condense les sujets et sous‑sujets clés ainsi que les principaux enseignements du plan actuel, en vous concentrant sur les points qui répondent le mieux à la requête initiale. Visez environ {round((elapsed_cycles * 0.25) + 2)} sujets principaux et {round((elapsed_cycles * 0.8) + 5)} sous‑sujets dans votre plan révisé.
 
@@ -7668,12 +7669,16 @@ Votre plan révisé NE DOIT PAS :
 
 L'objectif est de produire un plan logique et fluide, adapté à la rédaction du rapport final à partir de la requête et des recherches collectées.
 
+"""
+            ) + """
 Format de sortie attendu : un objet JSON valide avec la structure suivante :
-{"outline": [
-  {"topic": "Sujet principal 1", "subtopics": ["Sous‑sujet 1.1", "Sous‑sujet 1.2"]}},
-
-	  {{"topic": "Main topic 2", "subtopics": ["Subtopic 2.1", "Subtopic 2.2"]}}
-	]}}""",
+{
+  "outline": [
+    {"topic": "Sujet principal 1", "subtopics": ["Sous‑sujet 1.1", "Sous‑sujet 1.2"]},
+    {"topic": "Sujet principal 2", "subtopics": ["Sous‑sujet 2.1", "Sub‑sujet 2.2"]}
+  ]
+}
+""",
         }
 
         # Calculate similarity of research results to the research outline
