@@ -8802,7 +8802,7 @@ Il est essentiel de préserver la liaison directe entre chaque phrase et sa cita
             # Create a verification prompt
             verify_prompt = {
                 "role": "system",
-                "content": f"""Vous êtes un assistant de recherche (post‑universitaire) vérifiant l'exactitude des citations et des extraits cités par rapport aux sources.
+                "content": """Vous êtes un assistant de recherche (post‑universitaire) vérifiant l'exactitude des citations et des extraits cités par rapport aux sources.
 
 Examinez le contenu de la source et vérifiez l'exactitude de chaque extrait. Une citation est considérée vérifiée si la source contient l'information citée.
 
