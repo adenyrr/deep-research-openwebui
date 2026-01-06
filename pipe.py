@@ -6078,6 +6078,18 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
             # Re-raise a JSON error with some context
             raise ValueError(f"Failed to parse JSON fragment from text: {txt[:200]}")
 
+    def _wrap_masked_text(self, text: str) -> str:
+        """Normalize masked message wrappers to a single <think>...</think>.
+
+        Removes any stray <think> or </think> tags inside the text and returns a properly
+        ordered wrapper so the UI receives `<think>content</think>`.
+        """
+        if not isinstance(text, str):
+            return text
+        # Remove any existing <think> or </think> tags
+        clean = re.sub(r'</?think>', '', text)
+        return f"<think>{clean}</think>"
+
     async def emit_message(self, message: str):
         """Emit a message to the client
 
@@ -6093,7 +6105,7 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
                 content_to_send = message
                 if getattr(self.valves, "STREAM_WRAP_MASKED", False):
                     try:
-                        content_to_send = f"<think>{message}</think>"
+                        content_to_send = self._wrap_masked_text(message)
                     except Exception:
                         content_to_send = message
 
@@ -6134,7 +6146,7 @@ Répondez JUSTE par « Oui » ou « Non » — aucune explication ni texte suppl
                 description_to_send = message
                 if getattr(self.valves, "STREAM_WRAP_MASKED", False):
                     try:
-                        description_to_send = f"<think>{message}</think>"
+                        description_to_send = self._wrap_masked_text(message)
                     except Exception:
                         description_to_send = message
 
